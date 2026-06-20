@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.cjs
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+coverage/
+.turbo/
+.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.p8
+*.crt
+
+# Google service account credentials and local auth
+*service-account*.json
+*gserviceaccount*.json
+google-credentials*.json
+google-service-account*.json
+credentials/
+secrets/
+keys/
+
+# Private or redistribution-sensitive templates
+Files/templates/official_raw/
+Files/templates/tagged/
+Files/templates/private/
+Files/templates/generated/
+Files/templates/**/*.official.doc
+Files/templates/**/*.official.docx
+Files/templates/**/*.official.xls
+Files/templates/**/*.official.xlsx
+
+# Generated society/admin outputs
+Files/generated/
+Files/exports/
+Files/tmp/
+generated/
+exports/
+tmp/
+
+# Local caches
+.cache/
+.eslintcache
+*.tsbuildinfo
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
+# Python caches used by document/spreadsheet tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
