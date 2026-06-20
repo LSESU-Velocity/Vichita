@@ -1,16 +1,20 @@
 # Dependencies
 node_modules/
+.pnpm-store/
 .pnp/
 .pnp.cjs
 
 # Build outputs
 .next/
+.eve/
 out/
 dist/
 build/
 coverage/
 .turbo/
 .vercel/
+.output/
+.nitro/
 
 # Logs
 *.log

@@ -1,0 +1,14 @@
+node_modules
+.eve
+.next
+.output
+.nitro
+dist
+coverage
+Files/templates
+Files/generated
+Files/exports
+Files/tmp
+.env
+.env.*
+!.env.example

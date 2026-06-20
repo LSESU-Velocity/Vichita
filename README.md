@@ -6,11 +6,50 @@ The project is intended to be reusable by other societies, but each society must
 
 ## Status
 
-This repository is currently in planning and setup. The canonical implementation plan lives in:
+This repository is in early scaffold. It contains a minimal Eve Slack agent plus planning documents for the full build.
+
+The canonical implementation plan lives in:
 
 - `Files/vichita_agent_brief_v2_google_workspace.md`
 - `Files/docs/MANUAL_SETUP_CHECKLIST.md`
 - `Files/docs/DATA_HANDLING_FOR_SU_REVIEW.md`
+
+Runtime agent files live in:
+
+- `agent/agent.ts`
+- `agent/instructions.md`
+- `agent/channels/slack.ts`
+- `agent/tools/`
+- `agent/skills/`
+
+## Development
+
+Install dependencies:
+
+```bash
+corepack pnpm install
+```
+
+Copy the environment template and fill values locally:
+
+```bash
+cp .env.example .env.local
+```
+
+Run local development:
+
+```bash
+corepack pnpm dev
+```
+
+Useful checks:
+
+```bash
+corepack pnpm typecheck
+corepack pnpm build
+```
+
+For Slack, use Vercel Connect and set `SLACK_CONNECTOR`. The Eve Slack route is `/eve/v1/slack`.
 
 ## Core Idea
 

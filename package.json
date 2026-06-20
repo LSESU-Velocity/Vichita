@@ -1,0 +1,28 @@
+{
+  "name": "vichita",
+  "version": "0.1.0",
+  "private": false,
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.12.4",
+  "type": "module",
+  "imports": {
+    "#*": "./agent/*",
+    "#evals/*": "./evals/*"
+  },
+  "scripts": {
+    "build": "eve build",
+    "dev": "eve dev",
+    "start": "eve start",
+    "typecheck": "tsgo"
+  },
+  "dependencies": {
+    "@vercel/connect": "0.2.3",
+    "ai": "7.0.0-beta.178",
+    "eve": "latest",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@typescript/native-preview": "7.0.0-dev.20260523.1"
+  }
+}
