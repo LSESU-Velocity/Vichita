@@ -1,6 +1,6 @@
 import { defineAgent } from "eve";
 
-const defaultModel = "anthropic/claude-sonnet-4.6";
+const defaultModel = "zai/glm-5.2";
 
 function readCsvEnv(name: string) {
   const value = process.env[name];

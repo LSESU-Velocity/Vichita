@@ -1,6 +1,7 @@
 # Vichita Agent Brief v2
 
 **Project:** LSESU Velocity internal Slack operations agent  
+**Creator:** Yamin Mushtaq  
 **Owner:** Velocity President  
 **Committee context:** President, Head of Operations, Head of Marketing, Head of Events, Head of Outreach/Partnerships  
 **Workspace:** Slack committee workspace  

@@ -29,6 +29,14 @@ export default defineTool({
   async execute(input) {
     const triggers: string[] = [];
     const humanReview: string[] = [];
+    const missingCriticalFields: string[] = [];
+    const blocksFinalSubmissionReadiness: string[] = [];
+
+    if (typeof input.expectedAttendance !== "number") {
+      missingCriticalFields.push("Expected attendance");
+      blocksFinalSubmissionReadiness.push("Expected attendance");
+      humanReview.push("Expected attendance missing; cannot rule out the over-75 large-event trigger.");
+    }
 
     if (input.tripBeyondM25 || input.overnightTrip) {
       triggers.push("Trip beyond M25 or overnight trip");
@@ -36,9 +44,12 @@ export default defineTool({
         route: "trip_process",
         triggers,
         humanReview,
-        confidence: "high",
+        missingCriticalFields,
+        blocksFinalSubmissionReadiness,
+        canGenerateDraftPack: missingCriticalFields.length === 0,
+        confidence: missingCriticalFields.length > 0 ? "medium" : "high",
         disclaimer:
-          "Draft aid only. Current published guidance and the live form/template are authoritative.",
+          "Draft aid only. Check current SU guidance and live forms before submission.",
       };
     }
 
@@ -90,15 +101,27 @@ export default defineTool({
           ? "large_event"
           : hasSpeaker
             ? "speaker_event"
-            : "regular_event_candidate";
+            : missingCriticalFields.length > 0
+              ? "needs_human_review"
+              : "regular_event_candidate";
+
+    const confidence =
+      missingCriticalFields.length > 0
+        ? "low"
+        : triggers.length > 0
+          ? "high"
+          : "medium";
 
     return {
       route,
       triggers,
       humanReview,
-      confidence: triggers.length > 0 ? "high" : "medium",
+      missingCriticalFields,
+      blocksFinalSubmissionReadiness,
+      canGenerateDraftPack: missingCriticalFields.length === 0,
+      confidence,
       disclaimer:
-        "Draft aid only. Current published guidance and the live form/template are authoritative.",
+        "Draft aid only. Check current SU guidance and live forms before submission.",
     };
   },
 });
