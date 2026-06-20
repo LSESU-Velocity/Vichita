@@ -1,10 +1,6 @@
 import { defineAgent } from "eve";
 
-const defaultModel = "openai/gpt-5.4-mini";
-// Fallbacks fire only when the primary model errors (e.g. a gateway 500).
-// Keep them to low-cost, non-OpenAI providers so a single provider incident
-// does not take down simple Slack operations.
-const defaultFallbackModels = ["zai/glm-5.2", "alibaba/qwen3.7-plus"];
+const defaultModel = "anthropic/claude-sonnet-4.6";
 
 function readCsvEnv(name: string) {
   const value = process.env[name];
@@ -18,10 +14,26 @@ function readCsvEnv(name: string) {
   return values.length > 0 ? values : undefined;
 }
 
+function providerFor(modelId: string) {
+  return modelId.split("/", 1)[0];
+}
+
 const model = process.env.EVE_MODEL?.trim() || defaultModel;
-const fallbackModels = (
-  readCsvEnv("EVE_MODEL_FALLBACKS") ?? defaultFallbackModels
-).filter((fallbackModel) => fallbackModel !== model);
+const modelProvider = providerFor(model);
+const fallbackModels = (readCsvEnv("EVE_MODEL_FALLBACKS") ?? [])
+  .filter((fallbackModel) => fallbackModel !== model)
+  .filter((fallbackModel) => {
+    const fallbackProvider = providerFor(fallbackModel);
+    const isSameProvider = fallbackProvider === modelProvider;
+
+    if (!isSameProvider) {
+      console.warn(
+        `[vichita] Ignoring EVE_MODEL_FALLBACKS entry "${fallbackModel}" because Eve currently routes "${model}" through provider "${modelProvider}". Cross-provider fallbacks caused AI Gateway invalid_request errors.`,
+      );
+    }
+
+    return isSameProvider;
+  });
 
 export default defineAgent({
   model,

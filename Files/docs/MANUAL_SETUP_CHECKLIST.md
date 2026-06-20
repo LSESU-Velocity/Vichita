@@ -111,8 +111,8 @@ Manual steps:
   - Google folder/template/tracker IDs.
   - Slack/Vercel Connect values once configured.
   - `AI_GATEWAY_API_KEY`, if using a Vercel AI Gateway API key instead of OIDC-only auth.
-  - `EVE_MODEL`, for example `openai/gpt-5.4-mini`.
-  - `EVE_MODEL_FALLBACKS`, for example `zai/glm-5.2,alibaba/qwen3.7-plus`.
+  - `EVE_MODEL`, for example `anthropic/claude-sonnet-4.6`.
+  - `EVE_MODEL_FALLBACKS`, optional. Keep fallback models on the same provider as `EVE_MODEL` unless `agent/agent.ts` is changed to use an explicit gateway model.
   - `CRON_SECRET` for protected Vercel Cron routes.
   - `RULES_SOURCE_SET_ID`.
   - `RULES_LAST_VERIFIED_DATE`.
@@ -166,9 +166,10 @@ Manual steps:
 1. Use Vercel AI Gateway for the default path.
 2. Add `AI_GATEWAY_API_KEY` in Vercel environment variables if the project is using an AI Gateway API key. Mark it sensitive.
 3. Set `EVE_MODEL` to a model slug supported by AI Gateway.
-   - Recommended starting value: `openai/gpt-5.4-mini`.
-   - Keep `EVE_MODEL_FALLBACKS` configured with at least one non-OpenAI model so a provider incident does not break simple Slack operations.
-   - Lower-cost experiment option: `alibaba/qwen3.7-plus`.
+   - Recommended starting value: `anthropic/claude-sonnet-4.6`.
+   - Leave `EVE_MODEL_FALLBACKS` empty at first.
+   - If fallbacks are added, keep them on the same provider as `EVE_MODEL` unless the agent config is changed to use an explicit gateway model. Cross-provider fallbacks caused Gateway `invalid_request` errors when Eve routed the primary model through a provider-specific path.
+   - Lower-cost experiment option after testing tool calls: an Alibaba Qwen model that is currently listed in the AI Gateway catalog.
    - Keep stronger models available later for long or sensitive document review.
 4. If using direct provider credentials instead of AI Gateway, create the required provider API key and store it only in env/secrets.
 5. Decide the default model for:
