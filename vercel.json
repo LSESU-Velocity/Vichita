@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/triggers/slack",
+      "destination": "/eve/v1/slack"
+    }
+  ]
+}

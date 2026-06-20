@@ -50,6 +50,9 @@ corepack pnpm build
 ```
 
 For Slack, use Vercel Connect and set `SLACK_CONNECTOR`. The Eve Slack route is `/eve/v1/slack`.
+If Connect is created with its default trigger path, it may post to `/triggers/slack`; `vercel.json`
+rewrites that path to `/eve/v1/slack`, but new connectors should still be configured with
+`/eve/v1/slack` as the trigger path.
 
 ## Core Idea
 
