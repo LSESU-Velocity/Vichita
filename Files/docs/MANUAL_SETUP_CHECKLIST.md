@@ -76,7 +76,9 @@ Needed IDs:
 
 ## 4. Google Sheets trackers
 
-Either create these manually now or let the agent create them after service-account access is working:
+Create one Google spreadsheet named `Vichita Trackers`, either manually now or with the agent after service-account access is working.
+
+Inside that spreadsheet, create these tabs:
 
 - `Events Tracker`
 - `Event Packs Index`
@@ -89,20 +91,13 @@ Either create these manually now or let the agent create them after service-acco
 - `Template Inventory`
 - `Source Registry`
 
-If created manually, copy each spreadsheet ID into environment variables or config.
+If created manually, copy the spreadsheet ID from the URL into environment variables or config.
 
 Recommended env/config names:
 
-- `GOOGLE_EVENTS_TRACKER_SHEET_ID`
-- `GOOGLE_PACK_INDEX_SHEET_ID`
-- `GOOGLE_COMPLIANCE_TASKS_SHEET_ID`
-- `GOOGLE_MARKETING_OPS_SHEET_ID`
-- `GOOGLE_SPONSORSHIP_TRACKER_SHEET_ID`
-- `GOOGLE_SPONSORSHIP_CONTRACTS_SHEET_ID`
-- `GOOGLE_FINANCE_TRACKER_SHEET_ID`
-- `GOOGLE_REMINDERS_SHEET_ID`
-- `GOOGLE_TEMPLATE_INVENTORY_SHEET_ID`
-- `GOOGLE_SOURCE_REGISTRY_SHEET_ID`
+- `GOOGLE_TRACKERS_SPREADSHEET_ID`
+
+Keep template file IDs separate. They point to individual Drive files, not tracker tabs.
 
 ## 5. Vercel setup
 

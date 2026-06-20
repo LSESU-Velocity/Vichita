@@ -520,7 +520,15 @@ Vichita/
 
 ### 10.2 Google Sheets as trackers
 
-Use Google Sheets instead of Notion databases:
+Use one Google spreadsheet instead of Notion databases or many separate tracker files.
+
+Spreadsheet name:
+
+```text
+Vichita Trackers
+```
+
+Tabs:
 
 1. `Events Tracker`
 2. `Event Packs Index`
@@ -529,7 +537,11 @@ Use Google Sheets instead of Notion databases:
 5. `Sponsorship Tracker` v2
 6. `Sponsorship Contracts` v2
 7. `Finance/Reimbursements` v2
-8. `Template Inventory` manual only, no monitor
+8. `Reminders`
+9. `Template Inventory` manual only, no monitor
+10. `Source Registry`
+
+Use `GOOGLE_TRACKERS_SPREADSHEET_ID` for the spreadsheet file. Use tab names internally for reads/writes.
 
 ### 10.3 Connector strategy
 
@@ -1039,7 +1051,7 @@ Approval rules:
 - Create tagged copies with placeholders.
 - Record field maps.
 - Create Google Drive folder structure.
-- Create initial Google Sheets trackers.
+- Create the `Vichita Trackers` spreadsheet and initial tabs.
 - Confirm data-handling questions with SU before broad use.
 
 ### Phase 1 - Eve Slack foundation
