@@ -59,6 +59,7 @@ Files/tmp/
 generated/
 exports/
 tmp/
+.tmp/
 
 # Local caches
 .cache/

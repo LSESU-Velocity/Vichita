@@ -13,10 +13,10 @@
     "#evals/*": "./evals/*"
   },
   "scripts": {
-    "build": "eve build",
-    "dev": "eve dev",
-    "start": "eve start",
-    "typecheck": "tsgo"
+    "build": "node ./node_modules/eve/bin/eve.js build",
+    "dev": "node ./node_modules/eve/bin/eve.js dev",
+    "start": "node ./node_modules/eve/bin/eve.js start",
+    "typecheck": "node ./node_modules/@typescript/native-preview/bin/tsgo.js --noEmit"
   },
   "dependencies": {
     "@vercel/connect": "0.2.3",

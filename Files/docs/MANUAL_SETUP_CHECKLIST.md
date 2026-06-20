@@ -153,9 +153,9 @@ Manual steps:
   - Approver Slack user IDs or user group IDs.
 6. Confirm whether the bot should respond in DMs, mentions, modals/buttons, or all three.
 
-Important: Eve's Slack route is `/eve/v1/slack`. Vercel Connect may default to `/triggers/slack`;
-either set the connector trigger path to `/eve/v1/slack`, or keep the repository's `vercel.json`
-rewrite from `/triggers/slack` to `/eve/v1/slack`.
+Important: this project mounts the Eve Slack channel at Vercel Connect's default trigger path,
+`/triggers/slack`. If you later change the connector trigger path, update
+`agent/channels/slack.ts` to match it and redeploy.
 
 ## 7. Model/provider setup
 
