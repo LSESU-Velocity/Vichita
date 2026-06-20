@@ -4,6 +4,35 @@ Last updated: 2026-06-20
 
 Use this checklist for the full Vichita build, including MVP and later v2 modules.
 
+## Current setup status
+
+Completed:
+
+- GitHub repository exists at `LSESU-Velocity/Vichita` and deploys to Vercel from `main`.
+- Public repository hygiene is in place: Apache-2.0 license, `NOTICE`, README, and gitignore rules for secrets, service-account keys, official templates, tagged private templates, and generated packs.
+- Vercel production deployment is live at `https://vichita.vercel.app`.
+- Vercel Connect Slack connector is installed for the Velocity Committee Slack workspace.
+- Slack @mentions work in the private `#vichita` test channel.
+- Eve Slack channel is mounted at Vercel Connect's default trigger path, `/triggers/slack`.
+- AI Gateway/model configuration is wired through `EVE_MODEL`; current default is `zai/glm-5.2`.
+- Same-provider fallback guard is implemented through `EVE_MODEL_FALLBACKS`.
+- Initial event classification, missing-field, and deadline tools exist in `agent/tools/`.
+- Phase 2 Google Workspace foundation exists in code, with live Google smoke pending env/share setup: env/config validation, service-account auth from `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, tracker tab/header verification, approval-gated tracker tab creation, under-width tab expansion before header writes, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, and RAW Source Registry row upsert.
+
+Partially complete:
+
+- Google Cloud project and service-account approach have been chosen. Runtime tools are wired, but live production access still depends on sharing the Drive folder/spreadsheet with the service account and setting Vercel env values.
+- Current-year large/flagship deadline env names exist, but values should stay blank until manually verified.
+- Template copy/fill and generated event packs are not implemented yet.
+
+Next manual setup focus:
+
+- Finish Google Drive folder/template sharing with the service account.
+- Create/upload the single `Vichita Trackers` spreadsheet, then let the agent verify/create the required tabs after approval.
+- Add the Google folder/template/tracker IDs to Vercel once available.
+- Run the read-only Google Workspace setup check after env variables are set.
+- Keep SU/governance responses and data-handling constraints ready for the generated-pack phase.
+
 ## 1. Ownership decisions
 
 - Use the society Gmail / society Google account as the owner of the `Vichita` Google Drive folder, templates, and trackers.
@@ -76,9 +105,9 @@ Needed IDs:
 
 ## 4. Google Sheets trackers
 
-Create one Google spreadsheet named `Vichita Trackers`, either manually now or with the agent after service-account access is working.
+Create one Google spreadsheet named `Vichita Trackers`. Recommended path: create or upload the spreadsheet file, share it with the service account, set `GOOGLE_TRACKERS_SPREADSHEET_ID`, then let the approval-gated `ensure_google_tracker_tabs` tool create or verify the tabs and headers.
 
-Inside that spreadsheet, create these tabs:
+The required tabs are:
 
 - `Events Tracker`
 - `Event Packs Index`
@@ -86,16 +115,18 @@ Inside that spreadsheet, create these tabs:
 - `Marketing Ops Calendar`
 - `Sponsorship Tracker`
 - `Sponsorship Contracts`
-- `Finance/Reimbursements`
+- `Finance & Reimbursements`
 - `Reminders`
 - `Template Inventory`
 - `Source Registry`
 
-If created manually, copy the spreadsheet ID from the URL into environment variables or config.
+If you hand-create tabs manually, the tool will expand any required tab with too few columns before writing headers. `Events Tracker` needs 28 columns, through column `AB`.
 
 Recommended env/config names:
 
 - `GOOGLE_TRACKERS_SPREADSHEET_ID`
+
+After the spreadsheet ID and service account credential are configured, use the read-only `check_google_workspace_setup` tool to verify access. Use the approval-gated `ensure_google_tracker_tabs` tool to create missing tabs, expand under-width existing tabs, and write missing header rows. It will not repair existing differing headers unless `repairHeaderRows` is explicitly approved.
 
 Keep template file IDs separate. They point to individual Drive files, not tracker tabs.
 
@@ -186,7 +217,7 @@ Manual steps:
 Manual steps:
 
 1. Re-check current LSESU pages before real use.
-2. Create/update the `Source Registry` tracker.
+2. Create/update the `Source Registry` tracker. The Phase 2 code can now create the tab/header via `ensure_google_tracker_tabs` and upsert individual approved rows via `upsert_source_registry_entry`.
 3. Record:
   - URL.
   - Date checked.
@@ -221,20 +252,24 @@ Manual steps:
 
 ## 10. Build-time config files to create
 
-These should be created in the repo during implementation, with no secrets committed:
+Status of planned build-time config files:
+
+Created:
 
 - `agent/skills/lsesu-events.md`
 - `agent/skills/risk-assessment.md`
 - `agent/skills/google-workspace-ops.md`
 - `agent/skills/reminders.md`
 - `agent/skills/data-handling.md`
+- `.env.example`
+
+Still to create when needed:
+
 - `agent/skills/sponsorship-admin.v2.md`
 - `agent/skills/finance-admin.v2.md`
 - `config/approvers.example.json`
 - `config/google-workspace.example.json`
 - `docs/SOURCE_REGISTRY.md`
-- `.env.example`
-
 Do not commit:
 
 - `.env`

@@ -33,6 +33,49 @@ The true MVP is:
 
 Humans must review and submit everything. The agent must not sign contracts, submit forms, make payments, send emails, or publish public marketing.
 
+### 0.1 Current implementation status
+
+As of 2026-06-20, the project is past planning/scaffold and has a working Slack deployment.
+
+Complete:
+
+- Repository, license, README, setup checklist, and template/secret exclusion policy.
+- Eve project scaffold.
+- Vercel production deployment at `https://vichita.vercel.app`.
+- GitHub-to-Vercel deployment connection.
+- Vercel Connect Slack connector for the Velocity Committee workspace.
+- Slack @mention replies in the private `#vichita` test channel.
+- Slack route fixed to `POST /triggers/slack`, matching Vercel Connect's default trigger path.
+- Runtime model selection through `EVE_MODEL`, defaulting to `zai/glm-5.2`.
+- Same-provider `EVE_MODEL_FALLBACKS` guard to avoid known cross-provider Gateway routing errors.
+- Initial event-admin tools:
+  - `classify_event`
+  - `collect_missing_event_fields`
+  - `compute_deadlines`
+- Runtime instructions and skills for reactive-only behaviour, LSESU event rules, risk scoring, reminders, Google Workspace write gates, and data handling.
+- Phase 2 Google Workspace foundation:
+  - `googleapis` dependency for Drive/Sheets API access.
+  - Env/config validation for Google and deployment settings.
+  - Service-account auth from `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`.
+  - Read-only Drive root folder access check.
+  - One-spreadsheet `Vichita Trackers` tab/header schema, approval-gated tab/header creation, and under-width tab expansion before header writes.
+  - Canonical Event ID, pack ID, and idempotency helpers.
+  - Approval-gated event pack folder creation by Event ID and stored Slack thread key when available.
+  - Source Registry tab schema and approval-gated row upsert foundation.
+
+Partially complete:
+
+- Event classification and deadline behaviour works through Slack, but formal eval coverage and Slack modals are not complete.
+- Google Workspace live production access still depends on manual Drive/Sheets sharing and Vercel env setup.
+- Source/rule versioning is represented in env/config and tracker tooling, but current source rows still need manual verification and entry.
+
+Not complete yet:
+
+- Template copy/fill and generated event pack generation.
+- Marketing operations row creation.
+- Vercel Cron reminder processor.
+- Sponsorship, finance, automation-intake, website, and Launchpad-adjacent v2 modules.
+
 ---
 
 ## 1. Background and society context
@@ -537,18 +580,18 @@ Tabs:
 4. `Marketing Ops Calendar`
 5. `Sponsorship Tracker` v2
 6. `Sponsorship Contracts` v2
-7. `Finance/Reimbursements` v2
+7. `Finance & Reimbursements` v2
 8. `Reminders`
 9. `Template Inventory` manual only, no monitor
 10. `Source Registry`
 
-Use `GOOGLE_TRACKERS_SPREADSHEET_ID` for the spreadsheet file. Use tab names internally for reads/writes.
+Use `GOOGLE_TRACKERS_SPREADSHEET_ID` for the spreadsheet file. Use tab names internally for reads/writes. Recommended manual setup is to create/share the spreadsheet file and let `ensure_google_tracker_tabs` create or verify the tabs after approval; if tabs are hand-created, the tool expands under-width tabs before writing headers.
 
 ### 10.3 Connector strategy
 
 Use Vercel Connect for Slack because Slack is the main channel and Eve Slack templates use Vercel Connect for Slack credentials.
 
-Use Vercel AI Gateway for model routing, cost tracking, and provider flexibility. Store the gateway key in `AI_GATEWAY_API_KEY` if using API-key auth, or use Vercel OIDC where supported. Start with `EVE_MODEL=openai/gpt-5.4-mini` for token-efficient Slack operations, and test open Chinese models such as `alibaba/qwen3.5-flash` only after the core route/tool behavior is stable.
+Use Vercel AI Gateway for model routing, cost tracking, and provider flexibility. Store the gateway key in `AI_GATEWAY_API_KEY` if using API-key auth, or use Vercel OIDC where supported. Current runtime default is `EVE_MODEL=zai/glm-5.2`. Keep `EVE_MODEL_FALLBACKS` empty at first, or use only same-provider fallbacks unless `agent/agent.ts` is changed to use an explicit Gateway model wrapper.
 
 For Google Workspace, use a Google Cloud service account scoped to the dedicated `Vichita` Drive folder.
 
@@ -1048,16 +1091,20 @@ Approval rules:
 
 ### Phase 0 - Source and template setup
 
+Status: partially complete.
+
 - Verify current LSESU public pages manually.
 - Store `rules_last_verified_date`.
 - Download official raw templates where public.
 - Create tagged copies with placeholders.
 - Record field maps.
 - Create Google Drive folder structure.
-- Create the `Vichita Trackers` spreadsheet and initial tabs.
+- Create the `Vichita Trackers` spreadsheet; initial tabs/headers can be created or verified by the approval-gated `ensure_google_tracker_tabs` tool after service-account access works.
 - Confirm data-handling questions with SU before broad use.
 
 ### Phase 1 - Eve Slack foundation
+
+Status: complete for the test channel.
 
 - Scaffold Eve project using `npx eve@latest init` or verified Eve Slack starter.
 - Configure Slack via Vercel Connect.
@@ -1067,15 +1114,21 @@ Approval rules:
 
 ### Phase 2 - Google Workspace integration
 
-- Implement Google Workspace connection using the Google service account approach.
-- Use a JSON service-account key only for local/dev or early deployment if needed.
-- Prefer Vercel OIDC / Google Workload Identity Federation for production.
-- Implement folder creation.
-- Implement template copy/fill.
-- Implement tracker row append/update.
-- Ensure idempotency using the canonical Event ID scheme below: repeated "create pack" should update the same event record or create an explicit new version, not duplicate uncontrolled rows.
+Status: implemented in code, live access smoke pending manual env/share setup.
+
+- Implemented Google Workspace connection using the Google service account approach.
+- Implemented JSON service-account auth through `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` for local/dev and early deployment.
+- Keep Vercel OIDC / Google Workload Identity Federation as the preferred production hardening path later.
+- Implemented read-only Drive root folder access checks.
+- Implemented approval-gated event pack folder creation by canonical Event ID and stored Slack thread key when available.
+- Implemented the one-spreadsheet tracker foundation, required tabs, required headers, approval-gated tab/header creation, and column expansion for manually created under-width tabs.
+- Implemented Source Registry row upsert foundation.
+- Implemented Event ID, pack ID, and idempotency helper utilities. Slack-originated events now derive a stable Event ID from channel/thread context and Drive folder creation dedupes by stored `vichitaThreadKey` when those Slack fields are supplied.
+- Template copy/fill remains in Phase 4.
 
 ### Phase 3 - Event intake and classification
+
+Status: partially complete.
 
 - Slack modal for new event intake.
 - Classifier tool.
@@ -1085,6 +1138,8 @@ Approval rules:
 - Status output with disclaimer.
 
 ### Phase 4 - Event pack generation
+
+Status: not started.
 
 - Fill tagged risk assessment.
 - Fill tagged budget sheet where required/useful.
@@ -1096,11 +1151,15 @@ Approval rules:
 
 ### Phase 5 - Marketing operations row
 
+Status: not started.
+
 - Create a marketing ops calendar row after event pack creation.
 - Include launch gates and dependencies.
 - Do not generate captions/images.
 
 ### Phase 6 - Vercel Cron reminders
+
+Status: planned, not started.
 
 - Add `vercel.json` with a cron entry for `/api/cron/reminders`.
 - Protect the cron route with `CRON_SECRET`.
@@ -1114,6 +1173,8 @@ Approval rules:
 
 ### Phase 7 - Tests, evals, demo
 
+Status: helper tests started; formal evals and live Google smoke tests still pending.
+
 - Typecheck.
 - Unit tests.
 - Evals.
@@ -1123,6 +1184,8 @@ Approval rules:
 - Reminder tests: auth rejection without `CRON_SECRET`, due reminders send once, done/paused/cancelled reminders do not send, and weekly recurrence advances correctly in `Europe/London`.
 
 ### Phase 8 - V2 modules
+
+Status: planned, not started.
 
 - Sponsorship contract/admin pack.
 - Sponsorship tracker and sponsor benefits tracker.
@@ -1217,7 +1280,7 @@ Rules:
 
 - `YYYYMMDD` should use the proposed event date if known; otherwise use the creation date and mark the event date as missing.
 - `event-slug` should be a lowercase ASCII slug derived from the event name.
-- `shortid` should be a stable random suffix generated once.
+- `shortid` should be stable for the event. If Slack channel/thread context is available, derive it deterministically from that context plus the event date/name; otherwise generate it once and reuse the resulting Event ID.
 - Store the Event ID in:
   - Event pack folder name.
   - Events Tracker row.
@@ -1441,15 +1504,24 @@ Vichita does not replace the SU process. It makes the committee more reliable be
 
 Build the full Vichita project in phases. Implement the reactive event-pack workflow first as the first acceptance gate, but structure the repository so v2 sponsorship, finance, automation-intake, and website workflows can be added without rework.
 
-First build gate done:
+Current build gate status:
 
-1. Slack @mention works in test channel.
-2. Event intake modal works.
-3. Event classifier passes exactly-75 tests.
-4. Missing-info engine works.
-5. Draft event pack can be generated from tagged templates.
-6. Google Drive folder and Google Sheet tracker row are created only after approval.
-7. Marketing ops calendar row is created with launch gates, not generated captions.
-8. Every output includes the draft/disclaimer/verified-date note.
-9. No proactive watching or template monitor exists.
-10. Data-handling document is present for SU review.
+Done:
+
+1. Slack @mention works in the private `#vichita` test channel.
+2. Event classifier exists and has been manually smoke-tested through Slack.
+3. Missing-info engine exists.
+4. Deadlines tool exists.
+5. Runtime output includes draft/disclaimer language.
+6. No proactive watching or template monitor exists.
+7. Data-handling document is present for SU review.
+8. GitHub/Vercel/Slack/AI Gateway foundation is working.
+9. Google Workspace Phase 2 foundation is implemented in code, with live Google smoke pending env/share setup: service-account auth, Drive root check, tracker schema/tab helpers, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, and RAW Source Registry upsert foundation.
+
+Still required for the first full event-pack acceptance gate:
+
+1. Event intake modal.
+2. Formal exactly-75 tests/evals.
+3. Manual Google Drive/Sheets sharing and Vercel env setup for live production access.
+4. Draft event pack generation from tagged templates.
+5. Marketing ops calendar row with launch gates.
