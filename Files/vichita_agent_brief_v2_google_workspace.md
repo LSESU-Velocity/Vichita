@@ -547,6 +547,8 @@ Use `GOOGLE_TRACKERS_SPREADSHEET_ID` for the spreadsheet file. Use tab names int
 
 Use Vercel Connect for Slack because Slack is the main channel and Eve Slack templates use Vercel Connect for Slack credentials.
 
+Use Vercel AI Gateway for model routing, cost tracking, and provider flexibility. Store the gateway key in `AI_GATEWAY_API_KEY` if using API-key auth, or use Vercel OIDC where supported. Start with `EVE_MODEL=openai/gpt-5.4-mini` for token-efficient Slack operations, and test open Chinese models such as `alibaba/qwen3.5-flash` only after the core route/tool behavior is stable.
+
 For Google Workspace, use a Google Cloud service account scoped to the dedicated `Vichita` Drive folder.
 
 Chosen approach:

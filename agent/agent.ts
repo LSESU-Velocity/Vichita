@@ -1,5 +1,5 @@
 import { defineAgent } from "eve";
 
 export default defineAgent({
-  model: process.env.EVE_MODEL ?? "anthropic/claude-haiku-4.5",
+  model: process.env.EVE_MODEL ?? "openai/gpt-5.4-mini",
 });
