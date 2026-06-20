@@ -112,6 +112,7 @@ Manual steps:
   - Slack/Vercel Connect values once configured.
   - `AI_GATEWAY_API_KEY`, if using a Vercel AI Gateway API key instead of OIDC-only auth.
   - `EVE_MODEL`, for example `openai/gpt-5.4-mini`.
+  - `EVE_MODEL_FALLBACKS`, for example `zai/glm-5.2,alibaba/qwen3.7-plus`.
   - `CRON_SECRET` for protected Vercel Cron routes.
   - `RULES_SOURCE_SET_ID`.
   - `RULES_LAST_VERIFIED_DATE`.
@@ -126,6 +127,7 @@ Manual steps:
 Suggested early env names:
 
 - `EVE_MODEL`
+- `EVE_MODEL_FALLBACKS`
 - `AI_GATEWAY_API_KEY`
 - `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`
 - `GOOGLE_DRIVE_ROOT_FOLDER_ID`
@@ -165,7 +167,8 @@ Manual steps:
 2. Add `AI_GATEWAY_API_KEY` in Vercel environment variables if the project is using an AI Gateway API key. Mark it sensitive.
 3. Set `EVE_MODEL` to a model slug supported by AI Gateway.
    - Recommended starting value: `openai/gpt-5.4-mini`.
-   - Lower-cost experiment option: `alibaba/qwen3.5-flash`.
+   - Keep `EVE_MODEL_FALLBACKS` configured with at least one non-OpenAI model so a provider incident does not break simple Slack operations.
+   - Lower-cost experiment option: `alibaba/qwen3.7-plus`.
    - Keep stronger models available later for long or sensitive document review.
 4. If using direct provider credentials instead of AI Gateway, create the required provider API key and store it only in env/secrets.
 5. Decide the default model for:
