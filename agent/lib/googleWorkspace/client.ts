@@ -5,14 +5,28 @@ import {
   readServiceAccountCredentials,
 } from "./config.js";
 
-export function createGoogleAuthClient() {
-  const credentials = readServiceAccountCredentials();
+// Cap every Google API request so a single stuck call fails fast (~20s) instead
+// of hanging until the serverless function's hard limit, which previously
+// surfaced as silent 300s Vercel runtime timeouts. gaxios applies this global
+// option to every googleapis request.
+const GOOGLE_REQUEST_TIMEOUT_MS = 20_000;
+google.options({ timeout: GOOGLE_REQUEST_TIMEOUT_MS });
 
-  return new google.auth.JWT({
-    email: credentials.client_email,
-    key: credentials.private_key,
-    scopes: GOOGLE_WORKSPACE_SCOPES,
-  });
+let cachedAuthClient: InstanceType<typeof google.auth.JWT> | undefined;
+
+// Reuse a single JWT auth client so the OAuth access token is fetched once and
+// cached, instead of re-authenticating on every Drive/Docs/Sheets call.
+export function createGoogleAuthClient() {
+  if (!cachedAuthClient) {
+    const credentials = readServiceAccountCredentials();
+    cachedAuthClient = new google.auth.JWT({
+      email: credentials.client_email,
+      key: credentials.private_key,
+      scopes: GOOGLE_WORKSPACE_SCOPES,
+    });
+  }
+
+  return cachedAuthClient;
 }
 
 export function createDriveClient() {
