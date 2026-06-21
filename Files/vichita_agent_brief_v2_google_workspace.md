@@ -9,7 +9,7 @@
 **Agent framework:** Vercel Eve  
 **Primary channel integration:** Slack through Vercel Connect  
 **MVP posture:** Reactive only; no proactive monitoring; no template version monitor  
-**Last source review:** 2026-06-19
+**Last source review:** 2026-06-21
 
 ---
 
@@ -35,7 +35,7 @@ Humans must review and submit everything. The agent must not sign contracts, sub
 
 ### 0.1 Current implementation status
 
-As of 2026-06-20, the project is past planning/scaffold and has a working Slack deployment.
+As of 2026-06-21, the project has a working Slack deployment and the core event-pack workflow is live-tested.
 
 Complete:
 
@@ -63,15 +63,24 @@ Complete:
   - Approval-gated event pack folder creation by Event ID and stored Slack thread key when available.
   - Source Registry tab schema and approval-gated row upsert foundation.
   - Live production smoke on 2026-06-21: Google setup check passed, tracker tabs/headers matched, and approval-gated Drive pack folder creation produced a clean `DD-MM-YYYY - Event Name` folder with Event ID/thread-key metadata.
+- Phase 4 event-pack generation:
+  - Approval-gated `generate_event_pack` creates/updates the risk assessment Google Doc from the tagged template, budget Google Sheet when required/requested, LSESU form-field Google Sheet, deadline plan Google Sheet, internal review summary Google Doc, Event Packs Index row, Events Tracker row, and Compliance Tasks rows.
+  - Same-version `update_event_pack_fields` patches existing packs in place for changed fields instead of creating fresh hallucinated packs.
+  - Generated field packs and deadline plans are now native Google Sheets, not flat Markdown/Docs.
+  - Accessibility checklist actions and deadline actions are also represented in the `Compliance Tasks` tracker with stable task IDs.
+  - Pre-approval Slack output is deliberately short so Eve can checkpoint approval cards before Vercel's 300-second Hobby runtime cap.
+  - Live Slack test confirmed fast, accurate pack generation after the short pre-approval fix.
+- Date validation now rejects impossible calendar dates such as February 30 before identity/deadline/Drive writes.
+- Diagnostics hooks and Google-write breadcrumbs exist to identify future timeout locations.
 
 Partially complete:
 
 - Event classification and deadline behaviour works through Slack, but formal eval coverage and Slack modals are not complete.
 - Source/rule versioning is represented in env/config and tracker tooling, but current source rows still need manual verification and entry.
+- Live follow-up bugs to fix next: Slack modal answer submission can show "failed, try again" even though the value is accepted, and a hackathon at one venue was misclassified as a UK trip.
 
 Not complete yet:
 
-- Template copy/fill and generated event pack generation.
 - Marketing operations row creation.
 - Vercel Cron reminder processor.
 - Sponsorship, finance, automation-intake, website, and Launchpad-adjacent v2 modules.
@@ -675,7 +684,7 @@ Document output policy:
 - Keep an exportable `.docx` / `.xlsx` copy in the same Drive folder for LSESU/manual submission and formatting fallback.
 - Risk assessments and sponsorship contracts should be generated from `.docx` templates, uploaded to Drive, and imported to native Google Docs for review where conversion quality is acceptable.
 - Budgets should be generated from `.xlsx` templates with formulas and numeric cells preserved, uploaded/imported to native Google Sheets for committee editing, and kept exportable as `.xlsx`.
-- Field packs, accessibility checklists, deadline plans, and internal review summaries can be generated directly as Markdown/Google Docs content because they are internal review artifacts.
+- Field packs and deadline plans should be generated as native Google Sheets, because they are row-oriented working artifacts. Internal review summaries should remain Google Docs. Accessibility checklist actions should be written to the `Compliance Tasks` tracker and, where useful, reflected in the internal review summary rather than created as a separate checklist document.
 - Use the tagged templates generated from the current public LSESU files.
 - If a template changes, do a manual re-tagging pass.
 - Do not build a template version monitor.
@@ -1131,7 +1140,7 @@ Status: complete for the Phase 2 foundation and live-smoke-tested in Slack.
 - Implemented Source Registry row upsert foundation.
 - Implemented Event ID, pack ID, and idempotency helper utilities. Slack-originated events now derive a stable Event ID from channel/thread context and Drive folder creation dedupes by stored `vichitaThreadKey` when those Slack fields are supplied.
 - Live-smoke-tested on 2026-06-21 from Slack: read-only setup check passed, tracker tab/header verification found no differences, approval-gated folder creation worked, and folder naming now uses `DD-MM-YYYY - Event Name` while keeping IDs in metadata.
-- Template copy/fill remains in Phase 4.
+- Template copy/fill and event-pack document generation moved into Phase 4 and are now implemented; future work in this area is polish, eval coverage, and live bug fixing.
 
 ### Phase 3 - Event intake and classification
 
@@ -1146,15 +1155,25 @@ Status: partially complete.
 
 ### Phase 4 - Event pack generation
 
-Status: not started.
+Status: implemented and live-tested in Slack, with follow-up polish pending.
 
-- Fill tagged risk assessment.
-- Fill tagged budget sheet where required/useful.
-- Generate Regular/Large/Speaker form field pack.
-- Generate accessibility checklist.
-- Generate internal review summary.
-- Save files to Drive after approval.
-- Link pack in Slack thread.
+Complete:
+
+- Fill tagged native Google Docs risk assessment template, including structured risk table rows and scalar header updates.
+- Fill budget Google Sheet where required/useful, preserving numeric budget values.
+- Generate Regular/Large/Speaker LSESU form-field pack as a native Google Sheet.
+- Generate deadline plan as a native Google Sheet.
+- Write accessibility checklist actions and deadline actions into the `Compliance Tasks` tracker with stable task IDs.
+- Generate internal review summary as a Google Doc.
+- Save/reuse files in Drive after Eve approval, deduped by Event ID, pack ID, document type, and Slack thread metadata where available.
+- Link generated pack files in Slack and tracker rows.
+- Patch existing same-version packs in place with `update_event_pack_fields` for changed event details.
+- Keep pre-approval Slack output short to avoid repeated approval-card generation before Eve checkpointing.
+
+Known next fixes:
+
+- Slack modal answer submission can display "failed, try again" while still accepting the submitted value.
+- Hackathon-at-one-venue prompts can be misclassified as UK trips; trip classification needs a stricter "actual travel away from venue / beyond M25 / overnight accommodation" trigger.
 
 ### Phase 5 - Marketing operations row
 
@@ -1180,7 +1199,7 @@ Status: planned, not started.
 
 ### Phase 7 - Tests, evals, demo
 
-Status: helper tests and Phase 2 live Google smoke complete; formal evals still pending.
+Status: helper tests, Phase 2 live Google smoke, and Phase 4 live event-pack smoke complete; formal evals still pending.
 
 - Typecheck.
 - Unit tests.
@@ -1525,11 +1544,15 @@ Done:
 7. Data-handling document is present for SU review.
 8. GitHub/Vercel/Slack/AI Gateway foundation is working.
 9. Google Workspace Phase 2 foundation is live-smoke-tested: service-account auth, Drive root check, tracker schema/tab helpers, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, clean human-readable folder names, and RAW Source Registry upsert foundation.
+10. Phase 4 event-pack generation is implemented and live-tested: approval-gated generation creates the risk assessment Doc, budget Sheet, form-field Sheet, deadline plan Sheet, internal review Doc, tracker rows, and Compliance Tasks rows.
+11. Same-version pack updates patch existing generated files instead of creating new packs when the user asks for corrections.
+12. Pre-approval Slack output is short enough for Eve to checkpoint approval cards reliably in production testing.
 
 Still required for the first full event-pack acceptance gate:
 
 1. Event intake modal.
-2. Formal exactly-75 tests/evals.
+2. Formal exactly-75 and route-classification tests/evals.
 3. Source Registry rows and current source verification for production pack reliance.
-4. Draft event pack generation from tagged templates.
-5. Marketing ops calendar row with launch gates.
+4. Fix live modal answer submission UX: submitted name/email is accepted, but Slack/Eve shows "failed, try again".
+5. Fix live route bug: a hackathon at one venue was classified as a UK trip despite no travel/trip wording.
+6. Marketing ops calendar row with launch gates.

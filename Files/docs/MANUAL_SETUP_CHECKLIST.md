@@ -20,19 +20,23 @@ Completed:
 - Same-provider fallback guard is implemented through `EVE_MODEL_FALLBACKS`.
 - Initial event classification, missing-field, and deadline tools exist in `agent/tools/`.
 - Phase 2 Google Workspace foundation is complete and live-smoke-tested: env/config validation, service-account auth from `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, tracker tab/header verification, under-width tab expansion before header writes, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, duplicate-safe Drive metadata, and RAW Source Registry row upsert.
+- Phase 4 event-pack generation is implemented and live-tested: approval-gated generation creates/reuses the risk assessment Doc, budget Sheet, LSESU form-field Sheet, deadline plan Sheet, internal review summary Doc, Event Packs Index row, Events Tracker row, and Compliance Tasks rows.
+- Same-version pack updates are implemented through `update_event_pack_fields`, so corrections should patch existing packs rather than creating new ones.
+- Pre-approval Slack summaries have been shortened to avoid repeated approval-card generation before Eve checkpointing.
 
 Partially complete:
 
 - Current-year large/flagship deadline env names exist, but values should stay blank until manually verified.
 - Source Registry rows still need approved source entries after manual verification.
-- Template copy/fill and generated event packs are not implemented yet.
+- Formal route/classifier eval coverage and Slack modal polish are still pending.
 
-Next manual setup focus:
+Next manual/setup and implementation focus:
 
 - Add approved rows to the `Source Registry` after current LSESU source verification.
 - Verify current-year large/flagship deadline values before setting deadline env vars.
-- Keep SU/governance responses and data-handling constraints ready for the generated-pack phase.
-- Move implementation focus to Phase 4 template copy/fill and generated event packs.
+- Fix live Slack modal answer submission UX: submitted name/email is accepted, but the modal reports "failed, try again".
+- Fix live route-classification bug: hackathons at a single venue must not be classified as UK trips unless the user actually describes travel beyond the normal venue context, beyond-M25 travel, overnight accommodation, or a trip process.
+- Add formal evals for event routes, including hackathon-at-one-venue versus actual trip examples.
 
 ## 1. Ownership decisions
 

@@ -18,12 +18,15 @@ Completed:
 - Vercel AI Gateway model routing configured through `EVE_MODEL`, currently defaulting to `zai/glm-5.2`, with same-provider fallback protection.
 - Initial Slack-tested event classification flow with draft-only disclaimer.
 - Phase 2 Google Workspace foundation is live-smoke-tested: env/config validation, Google service-account auth via `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, one-spreadsheet tracker schema setup with under-width tab expansion, stable Slack-thread Event ID/idempotency helpers, approval-gated Drive folder creation, tracker verification, and RAW Source Registry upsert foundation.
+- Phase 4 event-pack generation is implemented and live-tested: approval-gated pack generation creates/updates the risk assessment Google Doc, budget Google Sheet, LSESU form-field Google Sheet, deadline plan Google Sheet, internal review summary Google Doc, and tracker/compliance-task rows.
+- Same-version event-pack patching is implemented for corrections to existing packs, with lookup by visible event name, Event ID, folder link, or Slack thread context.
+- The pre-approval Slack step was shortened so Eve can checkpoint approval cards reliably before Vercel's 300-second Hobby runtime cap.
 
 In progress / next:
 
 - Source Registry rows and current-year source verification before real pack reliance.
 - Event intake modal and formal classifier evals.
-- Event pack generation from tagged templates after approval.
+- Fix two live follow-up bugs: Slack modal answer submission shows "failed, try again" even though the value is accepted, and hackathon-at-one-venue prompts can be misclassified as UK trips.
 - Reminder tracker plus protected Vercel Cron route.
 
 Not started:

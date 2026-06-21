@@ -29,6 +29,10 @@ Build Vichita as a reactive Slack operations/compliance agent for student societ
 - The agent must not passively monitor Slack.
 - Humans submit SU forms manually.
 
+## Runtime Notes
+
+- Eve 0.11.7 exposes approval gates through `needsApproval` (`always`, `once`, `never`, or a predicate with `approvedTools`, `toolInput`, and `toolName`). It does not expose an authored-tool idempotency key for a specific pending approval card. If a Vercel timeout kills the model step before `input.requested` / `session.waiting`, Eve may re-run that step and emit another approval card. Do not build a brittle app-layer workaround unless Eve adds a supported key. Current mitigation: keep pre-approval Slack output short, and keep Drive/document writes idempotent by Event ID, Slack thread key, pack version, and document type.
+
 ## Local Commands
 
 - `pnpm dev`: run Eve locally.
