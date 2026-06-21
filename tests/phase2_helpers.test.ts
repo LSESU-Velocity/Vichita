@@ -15,7 +15,13 @@ import {
   displayDateFromEventDatePart,
   displayDateFromIsoDate,
 } from "../agent/lib/dateLabels.ts";
-import { eventPackFolderName } from "../agent/lib/googleWorkspace/drive.ts";
+import {
+  createOrFindEventPackFolder,
+  findEventPackFolderForUpdate,
+  eventPackFolderDisplayEventName,
+  eventPackFolderMatchesEventName,
+  eventPackFolderName,
+} from "../agent/lib/googleWorkspace/drive.ts";
 import { minimalTextEdit } from "../agent/lib/googleWorkspace/docs.ts";
 import {
   buildColumnExpansionRequest,
@@ -23,6 +29,7 @@ import {
   compareHeaders,
   trackerGridProperties,
   trackerRequiredColumnCount,
+  patchTrackerRow,
   upsertTrackerRows,
 } from "../agent/lib/googleWorkspace/sheets.ts";
 import { buildSourceRegistryEntry } from "../agent/lib/sourceRegistry.ts";
@@ -41,9 +48,11 @@ import {
   type EventPackInput,
 } from "../agent/lib/eventPack.ts";
 import {
+  buildGeneratedRiskCellUpdateRequests,
   buildGeneratedRiskRowDeleteRequests,
   buildGeneratedRiskRowInsertRequests,
   buildNoActivityRiskRow,
+  buildRiskHeaderFieldValueUpdateRequests,
   buildRiskHeaderScalarUpdateRequests,
   buildRiskTableFillRequests,
   buildRiskTableRowInsertRequests,
@@ -353,6 +362,198 @@ test("event pack folder names are human-readable and keep IDs out of the visible
   );
 });
 
+test("event pack folder matching detects same visible event names", () => {
+  assert.equal(
+    eventPackFolderDisplayEventName("04-11-2026 - AI Startup Sprint"),
+    "AI Startup Sprint",
+  );
+  assert.equal(
+    eventPackFolderMatchesEventName({
+      folderName: "04-11-2026 - AI Startup Sprint",
+      eventName: "AI startup sprint",
+    }),
+    true,
+  );
+  assert.equal(
+    eventPackFolderMatchesEventName({
+      folderName: "04-11-2026 - Cafe Demo Night",
+      eventName: "Café demo night",
+    }),
+    true,
+  );
+  assert.equal(
+    eventPackFolderMatchesEventName({
+      folderName: "04-11-2026 - AI Startup Sprint",
+      eventName: "AI Policy Workshop",
+    }),
+    false,
+  );
+});
+
+function withFakeGoogleWorkspaceEnv(run: () => Promise<void>) {
+  const originalEnv = {
+    GOOGLE_SERVICE_ACCOUNT_JSON_BASE64: process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64,
+    GOOGLE_DRIVE_ROOT_FOLDER_ID: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
+    GOOGLE_TRACKERS_SPREADSHEET_ID: process.env.GOOGLE_TRACKERS_SPREADSHEET_ID,
+  };
+  const credentials = {
+    client_email: "service@example.iam.gserviceaccount.com",
+    private_key: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+  };
+  process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 = Buffer.from(
+    JSON.stringify(credentials),
+  ).toString("base64");
+  process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID = "drive-root";
+  process.env.GOOGLE_TRACKERS_SPREADSHEET_ID = "tracker-sheet";
+
+  return run().finally(() => {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+}
+
+test("event pack folder creation refuses same-name duplicates when identity does not match", async () => {
+  await withFakeGoogleWorkspaceEnv(async () => {
+    const calls = { create: 0 };
+    const fakeDrive = {
+      files: {
+        get: async () => ({
+          data: {
+            id: "drive-root",
+            name: "Vichita",
+            mimeType: "application/vnd.google-apps.folder",
+            driveId: "shared-drive",
+            trashed: false,
+            webViewLink: "https://drive/folders/drive-root",
+            capabilities: { canAddChildren: true, canEdit: true },
+          },
+        }),
+        list: async ({ q }: { q: string }) => {
+          if (q.includes("name = 'Event Packs'")) {
+            return {
+              data: {
+                files: [
+                  {
+                    id: "event-packs-root",
+                    name: "Event Packs",
+                    webViewLink: "https://drive/folders/event-packs-root",
+                  },
+                ],
+              },
+            };
+          }
+
+          if (q.includes("appProperties has")) {
+            return { data: { files: [] } };
+          }
+
+          if (q.includes("'event-packs-root' in parents")) {
+            return {
+              data: {
+                files: [
+                  {
+                    id: "existing-pack",
+                    name: "04-11-2026 - AI Startup Sprint",
+                    webViewLink: "https://drive/folders/existing-pack",
+                    appProperties: {
+                      vichitaEventId: "EVT-20261104-ai-startup-sprint-aaaabbbb",
+                    },
+                  },
+                ],
+              },
+            };
+          }
+
+          return { data: { files: [] } };
+        },
+        create: async () => {
+          calls.create += 1;
+          return { data: { id: "new-pack", name: "21-06-2026 - AI startup sprint" } };
+        },
+      },
+    };
+
+    await assert.rejects(
+      () =>
+        createOrFindEventPackFolder({
+          eventId: "EVT-20260621-ai-startup-sprint-ccccdddd",
+          eventName: "AI startup sprint",
+          client: fakeDrive as never,
+        }),
+      /same event name already exists/,
+    );
+    assert.equal(calls.create, 0);
+  });
+});
+test("event pack update lookup can find a unique existing folder by visible event name", async () => {
+  await withFakeGoogleWorkspaceEnv(async () => {
+    const fakeDrive = {
+      files: {
+        get: async () => ({
+          data: {
+            id: "drive-root",
+            name: "Vichita",
+            mimeType: "application/vnd.google-apps.folder",
+            driveId: "shared-drive",
+            trashed: false,
+            webViewLink: "https://drive/folders/drive-root",
+            capabilities: { canAddChildren: true, canEdit: true },
+          },
+        }),
+        list: async ({ q }: { q: string }) => {
+          if (q.includes("name = 'Event Packs'")) {
+            return {
+              data: {
+                files: [
+                  {
+                    id: "event-packs-root",
+                    name: "Event Packs",
+                    webViewLink: "https://drive/folders/event-packs-root",
+                  },
+                ],
+              },
+            };
+          }
+          if (q.includes("'event-packs-root' in parents")) {
+            return {
+              data: {
+                files: [
+                  {
+                    id: "existing-pack",
+                    name: "04-11-2026 - AI Startup Sprint",
+                    webViewLink: "https://drive/folders/existing-pack",
+                    appProperties: {
+                      vichitaEventId: "EVT-20261104-ai-startup-sprint-aaaabbbb",
+                    },
+                  },
+                ],
+              },
+            };
+          }
+          return { data: { files: [] } };
+        },
+      },
+    };
+
+    const result = await findEventPackFolderForUpdate({
+      eventName: "AI startup sprint",
+      client: fakeDrive as never,
+    });
+
+    assert.equal(result.matchedBy, "event_name");
+    assert.equal(result.folder.id, "existing-pack");
+    assert.equal(
+      result.folder.appProperties?.vichitaEventId,
+      "EVT-20261104-ai-startup-sprint-aaaabbbb",
+    );
+  });
+});
+
 test("tracker tab grid helpers allocate and expand enough columns for wide schemas", () => {
   assert.equal(columnLetter(1), "A");
   assert.equal(columnLetter(26), "Z");
@@ -616,6 +817,43 @@ test("risk assessment header updates replace generated scalar fields by template
   assert.ok(insertedText.includes("Saw Swee Hock Student Centre"));
   assert.ok(insertedText.includes("04-11-2026, setup 17:00, event 18:00-20:00"));
   assert.ok(insertedText.includes("21-06-2026"));
+});
+test("partial risk assessment header updates touch only requested fields", () => {
+  const plan = buildRiskHeaderFieldValueUpdateRequests(fakeHeaderDocument(), {
+    event_location: "Saw Swee Hock SU07",
+  });
+  const insertedText = plan.requests
+    .map((request) => request.insertText?.text)
+    .filter((value): value is string => Boolean(value));
+
+  assert.deepEqual(plan.missingFields, []);
+  assert.deepEqual(plan.updatedFields, ["event_location"]);
+  assert.deepEqual(insertedText, ["Saw Swee Hock SU07"]);
+});
+
+test("partial risk row updates target generated cells without rebuilding tables", () => {
+  const input: EventPackInput = {
+    eventId: "EVT-20261104-ai-startup-sprint-c91d",
+    eventName: "AI Startup Sprint",
+    expectedAttendance: 120,
+  };
+  const plan = buildGeneratedRiskCellUpdateRequests(
+    fakeGeneratedRiskDocument({ input, activityRowCount: 1 }),
+    [
+      {
+        hazardIdentified: "Capacity Control",
+        column: "actions_before_event",
+        text: "Confirm expected attendance (150) against venue capacity.",
+      },
+    ],
+  );
+  const insertedText = plan.requests
+    .map((request) => request.insertText?.text)
+    .filter((value): value is string => Boolean(value));
+
+  assert.deepEqual(plan.missingCells, []);
+  assert.deepEqual(plan.updatedCells, ["Capacity Control:actions_before_event"]);
+  assert.deepEqual(insertedText, ["Confirm expected attendance (150) against venue capacity."]);
 });
 
 test("generated risk sections are found case-insensitively from risk row builders", () => {
@@ -973,6 +1211,58 @@ test("accessibility checklist is represented as compliance task rows", () => {
   assert.equal(rows[0]["Due Date"], "2026-08-24");
   assert.equal(rows.find((row) => String(row["Task ID"]).endsWith("request-route"))?.["Blocker?"], "yes");
   assert.equal(rows.find((row) => String(row["Task ID"]).endsWith("food-allergens"))?.["Blocker?"], "yes");
+});
+test("tracker row patches update only supplied columns", async () => {
+  await withFakeGoogleWorkspaceEnv(async () => {
+    const headers = getTrackerTabDefinition("Events Tracker")?.headers ?? [];
+    const calls = {
+      get: [] as unknown[],
+      batchUpdate: [] as unknown[],
+    };
+    const existing = headers.map((header) => {
+      if (header === "Event ID") return "EVT-20261104-ai-startup-sprint-c91d";
+      if (header === "Event Name") return "AI Startup Sprint";
+      if (header === "Expected Attendance") return 120;
+      if (header === "Pack Folder Link") return "https://drive/folders/pack";
+      return "";
+    });
+    const fakeClient = {
+      spreadsheets: {
+        values: {
+          get: async (args: unknown) => {
+            calls.get.push(args);
+            const range = (args as { range: string }).range;
+            return range.endsWith("!1:1")
+              ? { data: { values: [headers] } }
+              : { data: { values: [existing] } };
+          },
+          batchUpdate: async (args: unknown) => {
+            calls.batchUpdate.push(args);
+            return { data: {} };
+          },
+        },
+      },
+    };
+
+    const result = await patchTrackerRow({
+      tabName: "Events Tracker",
+      keyColumn: "Event ID",
+      keyValue: "EVT-20261104-ai-startup-sprint-c91d",
+      patch: {
+        "Expected Attendance": 150,
+        "Last Updated": "2026-06-21T08:20:00.000Z",
+      },
+      client: fakeClient as never,
+    });
+    const data = (calls.batchUpdate[0] as { requestBody: { data: Array<{ range: string; values: unknown[][] }> } }).requestBody.data;
+
+    assert.equal(result.action, "patched");
+    assert.deepEqual(result.patchedColumns, ["Expected Attendance", "Last Updated"]);
+    assert.equal(calls.get.length, 2);
+    assert.equal(calls.batchUpdate.length, 1);
+    assert.equal(data.length, 2);
+    assert.deepEqual(data.map((entry) => entry.values[0][0]), [150, "2026-06-21T08:20:00.000Z"]);
+  });
 });
 test("batch tracker upsert reads once and writes mixed task rows together", async () => {
   const originalEnv = {

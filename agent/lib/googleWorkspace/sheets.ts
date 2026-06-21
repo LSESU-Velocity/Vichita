@@ -484,6 +484,116 @@ export async function upsertTrackerRow({
   };
 }
 
+export async function patchTrackerRow({
+  tabName,
+  keyColumn,
+  keyValue,
+  patch,
+  valueInputOption = "RAW",
+  client,
+}: {
+  tabName: string;
+  keyColumn: string;
+  keyValue: string;
+  patch: Record<string, string | number | boolean | null | undefined>;
+  valueInputOption?: "RAW" | "USER_ENTERED";
+  client?: sheets_v4.Sheets;
+}) {
+  const config = readGoogleWorkspaceConfig();
+  const sheets = getSheetsClient(client);
+  const definition = TRACKER_TAB_DEFINITIONS.find(
+    (candidate) => candidate.title === tabName,
+  );
+  if (!definition) {
+    throw new Error(`Unknown tracker tab "${tabName}".`);
+  }
+
+  const headerResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.trackersSpreadsheetId,
+    range: `${quoteSheetName(tabName)}!1:1`,
+  });
+  const headers =
+    headerResponse.data.values?.[0]?.map((value) => String(value)) ?? [];
+  const comparison = compareHeaders(headers, definition.headers);
+  if (!comparison.exactMatch) {
+    throw new Error(
+      `${tabName} headers are not ready. Run ensure_google_tracker_tabs first.`,
+    );
+  }
+
+  const keyIndex = headers.indexOf(keyColumn);
+  if (keyIndex === -1) {
+    throw new Error(`${tabName} does not have key column "${keyColumn}".`);
+  }
+
+  const patchEntries = Object.entries(patch).filter(([, value]) => value !== undefined);
+  if (patchEntries.length === 0) {
+    return {
+      action: "noop" as const,
+      tabName,
+      keyColumn,
+      keyValue,
+      patchedColumns: [],
+    };
+  }
+
+  const unknownColumns = patchEntries
+    .map(([column]) => column)
+    .filter((column) => !headers.includes(column));
+  if (unknownColumns.length > 0) {
+    throw new Error(
+      `${tabName} does not have patch columns: ${unknownColumns.join(", ")}.`,
+    );
+  }
+
+  const lastColumn = columnLetter(headers.length);
+  const dataResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.trackersSpreadsheetId,
+    range: `${quoteSheetName(tabName)}!A2:${lastColumn}`,
+  });
+  const rows = dataResponse.data.values ?? [];
+  const matches = rows
+    .map((values, index) => ({ values, rowNumber: index + 2 }))
+    .filter(({ values }) => String(values[keyIndex] ?? "") === keyValue);
+
+  if (matches.length > 1) {
+    throw new Error(
+      `${tabName} has duplicate rows for ${keyColumn}=${keyValue}. Resolve duplicates manually before writing.`,
+    );
+  }
+  if (matches.length === 0) {
+    throw new Error(
+      `${tabName} has no row for ${keyColumn}=${keyValue}. Generate the pack or repair the tracker before patching.`,
+    );
+  }
+
+  const rowNumber = matches[0].rowNumber;
+  const data = patchEntries.map(([column, value]) => {
+    const columnNumber = headers.indexOf(column) + 1;
+    const letter = columnLetter(columnNumber);
+    return {
+      range: `${quoteSheetName(tabName)}!${letter}${rowNumber}`,
+      values: [[value ?? ""]],
+    };
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: config.trackersSpreadsheetId,
+    requestBody: {
+      valueInputOption,
+      data,
+    },
+  });
+
+  return {
+    action: "patched" as const,
+    tabName,
+    keyColumn,
+    keyValue,
+    rowNumber,
+    patchedColumns: patchEntries.map(([column]) => column),
+  };
+}
 export async function upsertTrackerRows({
   tabName,
   keyColumn,

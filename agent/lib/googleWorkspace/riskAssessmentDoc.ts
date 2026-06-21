@@ -286,6 +286,39 @@ export type RiskAssessmentHeaderUpdateResult = {
   requestCount: number;
 };
 
+export type RiskHeaderFieldName = (typeof RISK_HEADER_FIELD_SPECS)[number]["field"];
+
+export type RiskTableColumnName =
+  | "hazard_identified"
+  | "why_hazard"
+  | "who_at_risk"
+  | "risk_score"
+  | "actions_before_event"
+  | "actions_during_event"
+  | "owner";
+
+const RISK_TABLE_COLUMN_INDEX: Record<RiskTableColumnName, number> = {
+  hazard_identified: 0,
+  why_hazard: 1,
+  who_at_risk: 2,
+  risk_score: 3,
+  actions_before_event: 4,
+  actions_during_event: 5,
+  owner: 6,
+};
+
+export type RiskGeneratedCellUpdate = {
+  hazardIdentified: string;
+  column: RiskTableColumnName;
+  text: string;
+};
+
+export type RiskGeneratedCellUpdateResult = {
+  updatedCells: string[];
+  missingCells: string[];
+  requestCount: number;
+};
+
 function normalizeSearchText(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -322,6 +355,25 @@ export function buildRiskHeaderScalarUpdateRequests(
   input: EventPackInput,
 ): RiskAssessmentHeaderUpdatePlan {
   const replacements = scalarReplacementValues(input);
+
+  return buildRiskHeaderFieldValueUpdateRequests(
+    document,
+    Object.fromEntries(
+      RISK_HEADER_FIELD_SPECS.map((spec) => [
+        spec.field,
+        replacements[spec.placeholder] ?? "",
+      ]),
+    ) as Partial<Record<RiskHeaderFieldName, string>>,
+  );
+}
+
+export function buildRiskHeaderFieldValueUpdateRequests(
+  document: docs_v1.Schema$Document,
+  fieldValues: Partial<Record<RiskHeaderFieldName, string>>,
+): RiskAssessmentHeaderUpdatePlan {
+  const requestedSpecs = RISK_HEADER_FIELD_SPECS.filter((spec) =>
+    Object.prototype.hasOwnProperty.call(fieldValues, spec.field),
+  );
   const indexedRequests: IndexedDocsRequest[] = [];
   const updatedFields = new Set<string>();
 
@@ -334,7 +386,7 @@ export function buildRiskHeaderScalarUpdateRequests(
         const cells = row.tableCells ?? [];
         if (cells.length < 2) continue;
 
-        for (const spec of RISK_HEADER_FIELD_SPECS) {
+        for (const spec of requestedSpecs) {
           if (updatedFields.has(spec.field)) continue;
 
           const labelCellIndex = cells.findIndex((cell) =>
@@ -348,7 +400,7 @@ export function buildRiskHeaderScalarUpdateRequests(
           indexedRequests.push(
             ...buildReplaceCellTextRequests(
               valueCell,
-              replacements[spec.placeholder] ?? "",
+              fieldValues[spec.field] ?? "",
               body.tabId,
             ),
           );
@@ -359,9 +411,9 @@ export function buildRiskHeaderScalarUpdateRequests(
   }
 
   const updated = Array.from(updatedFields);
-  const missingFields = RISK_HEADER_FIELD_SPECS.filter(
-    (spec) => !updatedFields.has(spec.field),
-  ).map((spec) => spec.field);
+  const missingFields = requestedSpecs
+    .filter((spec) => !updatedFields.has(spec.field))
+    .map((spec) => spec.field);
 
   return {
     requests: sortDocsRequestsDescending(indexedRequests),
@@ -601,6 +653,92 @@ export function buildRiskTableFillRequests(
   return buildRiskTableFillRequestsForMatch(match, rows, marker);
 }
 
+export function buildGeneratedRiskCellUpdateRequests(
+  document: docs_v1.Schema$Document,
+  updates: RiskGeneratedCellUpdate[],
+) {
+  const indexedRequests: IndexedDocsRequest[] = [];
+  const updatedCells = new Set<string>();
+
+  for (const body of documentBodies(document)) {
+    for (const element of body.content) {
+      const table = element.table;
+      if (!table) continue;
+
+      for (const row of table.tableRows ?? []) {
+        const cells = row.tableCells ?? [];
+        if (cells.length < RISK_COLUMN_COUNT) continue;
+        const hazardText = firstCellText(row);
+
+        for (const update of updates) {
+          const updateKey = `${update.hazardIdentified}:${update.column}`;
+          if (updatedCells.has(updateKey)) continue;
+          if (!textIncludesNormalized(hazardText, update.hazardIdentified)) continue;
+
+          indexedRequests.push(
+            ...buildReplaceCellTextRequests(
+              cells[RISK_TABLE_COLUMN_INDEX[update.column]],
+              update.text,
+              body.tabId,
+            ),
+          );
+          updatedCells.add(updateKey);
+        }
+      }
+    }
+  }
+
+  const missingCells = updates
+    .map((update) => `${update.hazardIdentified}:${update.column}`)
+    .filter((updateKey) => !updatedCells.has(updateKey));
+
+  return {
+    requests: sortDocsRequestsDescending(indexedRequests),
+    updatedCells: Array.from(updatedCells),
+    missingCells,
+  };
+}
+
+export async function updateGeneratedRiskAssessmentCells({
+  documentId,
+  updates,
+  docsClient,
+}: {
+  documentId: string;
+  updates: RiskGeneratedCellUpdate[];
+  docsClient?: docs_v1.Docs;
+}): Promise<RiskGeneratedCellUpdateResult> {
+  if (updates.length === 0) {
+    return { updatedCells: [], missingCells: [], requestCount: 0 };
+  }
+
+  const docs = getDocsClient(docsClient);
+  const document = await getGoogleDocument(docs, documentId);
+  const plan = buildGeneratedRiskCellUpdateRequests(document, updates);
+
+  if (plan.missingCells.length > 0) {
+    throw new Error(
+      `Risk assessment partial row update could not locate cells: ${plan.missingCells.join(
+        ", ",
+      )}.`,
+    );
+  }
+
+  await batchUpdateRiskDocument({
+    docs,
+    documentId,
+    document,
+    requests: plan.requests,
+    action: "partial generated row update",
+  });
+
+  return {
+    updatedCells: plan.updatedCells,
+    missingCells: plan.missingCells,
+    requestCount: plan.requests.length,
+  };
+}
+
 async function getGoogleDocument(docs: docs_v1.Docs, documentId: string) {
   const response = await docs.documents.get({
     documentId,
@@ -671,6 +809,42 @@ export async function updateRiskAssessmentHeaderFields({
     document,
     requests: plan.requests,
     action: "header field update",
+  });
+
+  return {
+    updatedFields: plan.updatedFields,
+    missingFields: plan.missingFields,
+    requestCount: plan.requests.length,
+  };
+}
+
+export async function updateRiskAssessmentHeaderFieldValues({
+  documentId,
+  fieldValues,
+  docsClient,
+}: {
+  documentId: string;
+  fieldValues: Partial<Record<RiskHeaderFieldName, string>>;
+  docsClient?: docs_v1.Docs;
+}): Promise<RiskAssessmentHeaderUpdateResult> {
+  const docs = getDocsClient(docsClient);
+  const document = await getGoogleDocument(docs, documentId);
+  const plan = buildRiskHeaderFieldValueUpdateRequests(document, fieldValues);
+
+  if (plan.missingFields.length > 0) {
+    throw new Error(
+      `Risk assessment partial header update could not locate fields: ${plan.missingFields.join(
+        ", ",
+      )}.`,
+    );
+  }
+
+  await batchUpdateRiskDocument({
+    docs,
+    documentId,
+    document,
+    requests: plan.requests,
+    action: "partial header field update",
   });
 
   return {
