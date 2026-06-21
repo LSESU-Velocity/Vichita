@@ -20,6 +20,7 @@ Deadline handling:
 - High-risk or high-profile speaker events use the 1-calendar-month minimum.
 - Large/flagship events use the current academic-year term deadline where one applies.
 - Trips use the trip process. Use the domestic UK or international trip lead time only after the trip type is known.
+- Before an approval-gated event-pack write, mention at most the nearest or hard-gate deadline. Put the full deadline list in the generated deadline sheet or in a post-approval summary only if needed.
 
 Accessibility handling:
 

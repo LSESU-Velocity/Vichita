@@ -8,7 +8,7 @@ const Input = z.object({
   proposedDate: z
     .string()
     .optional()
-    .describe("Preferred event date as YYYY-MM-DD. Used in the Event ID if valid."),
+    .describe("Preferred event date as YYYY-MM-DD. Must be a real calendar date if supplied."),
   existingEventId: z
     .string()
     .optional()

@@ -4,6 +4,7 @@ import { always } from "eve/tools/approval";
 import { z } from "zod";
 
 import { buildPackId, parseEventId } from "../lib/eventIdentity.js";
+import { isIsoCalendarDate } from "../lib/dateLabels.js";
 import {
   buildAccessibilityComplianceTaskRows,
   buildBudgetSheetUpdates,
@@ -630,14 +631,68 @@ async function fillBudgetSheet(spreadsheetId: string, input: z.infer<typeof Inpu
   }
 }
 
+type PackTraceLogger = (
+  step: string,
+  status: "start" | "done" | "failed",
+  details?: Record<string, unknown>,
+) => void;
+
+function googleWriteTraceLogger({
+  eventId,
+  packId,
+  packVersion,
+}: {
+  eventId: string;
+  packId: string;
+  packVersion: number;
+}): PackTraceLogger {
+  return (step, status, details = {}) => {
+    try {
+      console.info("[vichita] generate_event_pack.google", {
+        eventId,
+        packId,
+        packVersion,
+        step,
+        status,
+        ...details,
+      });
+    } catch {
+      // Diagnostic logging must not affect pack generation.
+    }
+  };
+}
+
+async function tracePackOperation<T>(
+  trace: PackTraceLogger,
+  step: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  trace(step, "start");
+  try {
+    const result = await operation();
+    trace(step, "done");
+    return result;
+  } catch (error) {
+    trace(step, "failed", {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    throw error;
+  }
+}
+
 export default defineTool({
   description:
-    "Approval-gated Google Workspace write. Generate a draft event pack for an Event ID: fill the tagged risk-assessment Google Doc template, copy/fill the budget Google Sheet when required or requested, create form-field and deadline Google Sheets, create the internal review Google Doc, and upsert tracker/task links. Humans still review and submit all SU forms manually.",
+    "Approval-gated Google Workspace write. Generate a draft event pack for an Event ID: fill the tagged risk-assessment Google Doc template, copy/fill the budget Google Sheet when required or requested, create form-field and deadline Google Sheets, create the internal review Google Doc, and upsert tracker/task links. Before this tool, emit only a short proposal, max 6 bullets or 120 words, then call it once and let the approval card handle consent. Do not generate a long staged summary, full deadline list, separate proceed question, or repeated approval calls in the same run. Humans still review and submit all SU forms manually.",
   inputSchema: Input,
   needsApproval: always(),
   async execute(input) {
     if (!parseEventId(input.eventId)) {
-      throw new Error("eventId must use EVT-YYYYMMDD-event-slug-shortid format.");
+      throw new Error("eventId must use EVT-YYYYMMDD-event-slug-shortid format with a real calendar date.");
+    }
+    if (input.proposedDate?.trim() && !isIsoCalendarDate(input.proposedDate)) {
+      throw new Error(
+        "proposedDate must be a real ISO calendar date in YYYY-MM-DD format. Ask the user to clarify impossible dates before generating a pack.",
+      );
     }
 
     const config = readGoogleWorkspaceConfig();
@@ -646,8 +701,14 @@ export default defineTool({
         "GOOGLE_TEMPLATE_RISK_ASSESSMENT_FILE_ID is required before generating event packs.",
       );
     }
+    const riskAssessmentTemplateFileId = config.riskAssessmentTemplateFileId;
 
     const packId = buildPackId(input.eventId, input.packVersion);
+    const traceGoogleWrite = googleWriteTraceLogger({
+      eventId: input.eventId,
+      packId,
+      packVersion: input.packVersion,
+    });
     const baseName = documentBaseName(input);
     const budgetDecision = budgetRequirement(input, input.includeBudget);
     const reusedFiles: string[] = [];
@@ -659,38 +720,47 @@ export default defineTool({
     }
 
     if (input.updateTrackers) {
-      await assertTrackersReadyForPackWrites();
+      await tracePackOperation(traceGoogleWrite, "trackers.preflight", () =>
+        assertTrackersReadyForPackWrites(),
+      );
     }
 
     const folder = input.packFolderId
-      ? {
+      ? await tracePackOperation(traceGoogleWrite, "folder.validateProvided", async () => ({
           action: "provided" as const,
-          folder: await validateProvidedPackFolder(input.packFolderId),
-        }
-      : await createOrFindEventPackFolder({
-          eventId: input.eventId,
-          eventName: input.eventName,
-          proposedDate: input.proposedDate,
-          createEventPacksParentIfMissing: input.createEventPacksParentIfMissing,
-          sourceSlackChannelId: input.sourceSlackChannelId,
-          sourceSlackThreadTs: input.sourceSlackThreadTs,
-        });
+          folder: await validateProvidedPackFolder(input.packFolderId!),
+        }))
+      : await tracePackOperation(traceGoogleWrite, "folder.createOrFind", () =>
+          createOrFindEventPackFolder({
+            eventId: input.eventId,
+            eventName: input.eventName,
+            proposedDate: input.proposedDate,
+            createEventPacksParentIfMissing: input.createEventPacksParentIfMissing,
+            sourceSlackChannelId: input.sourceSlackChannelId,
+            sourceSlackThreadTs: input.sourceSlackThreadTs,
+          }),
+        );
     const folderId = folder.folder.id;
 
-    const riskAssessment = await copyDriveFileToFolderOrReuse({
-      sourceFileId: config.riskAssessmentTemplateFileId,
-      parentFolderId: folderId,
-      name: `${baseName} - Risk Assessment v${input.packVersion}`,
-      documentType: "risk-assessment",
-      reusedFiles,
-      updateExistingDrafts: input.updateExistingDrafts,
-      appProperties: documentAppProperties({
-        eventId: input.eventId,
-        packId,
-        packVersion: input.packVersion,
-        documentType: "risk-assessment",
-      }),
-    });
+    const riskAssessment = await tracePackOperation(
+      traceGoogleWrite,
+      "riskAssessment.copyOrReuse",
+      () =>
+        copyDriveFileToFolderOrReuse({
+          sourceFileId: riskAssessmentTemplateFileId,
+          parentFolderId: folderId,
+          name: `${baseName} - Risk Assessment v${input.packVersion}`,
+          documentType: "risk-assessment",
+          reusedFiles,
+          updateExistingDrafts: input.updateExistingDrafts,
+          appProperties: documentAppProperties({
+            eventId: input.eventId,
+            packId,
+            packVersion: input.packVersion,
+            documentType: "risk-assessment",
+          }),
+        }),
+    );
 
     if (riskAssessment.mimeType !== GOOGLE_DOC_MIME_TYPE) {
       throw new Error(
@@ -698,48 +768,68 @@ export default defineTool({
       );
     }
 
-    const riskAssessmentTableFill = await fillRiskAssessmentTables({
-      documentId: riskAssessment.id,
-      input,
-      allowAlreadyFilled: input.updateExistingDrafts && reusedFiles.includes("risk-assessment"),
-    });
+    const riskAssessmentTableFill = await tracePackOperation(
+      traceGoogleWrite,
+      "riskAssessment.fillTables",
+      () =>
+        fillRiskAssessmentTables({
+          documentId: riskAssessment.id,
+          input,
+          allowAlreadyFilled:
+            input.updateExistingDrafts && reusedFiles.includes("risk-assessment"),
+        }),
+    );
 
-    const riskAssessmentHeaderUpdate = await updateRiskAssessmentHeaderFields({
-      documentId: riskAssessment.id,
-      input,
-    });
+    const riskAssessmentHeaderUpdate = await tracePackOperation(
+      traceGoogleWrite,
+      "riskAssessment.updateHeader",
+      () =>
+        updateRiskAssessmentHeaderFields({
+          documentId: riskAssessment.id,
+          input,
+        }),
+    );
 
     const riskAssessmentScalarReplacements = buildRiskAssessmentScalarReplacements(input);
-    await replaceGoogleDocText({
-      documentId: riskAssessment.id,
-      replacements: {
-        "{{placeholders}}": riskAssessmentScalarReplacements["{{placeholders}}"],
-      },
-    });
+    await tracePackOperation(traceGoogleWrite, "riskAssessment.replacePlaceholders", () =>
+      replaceGoogleDocText({
+        documentId: riskAssessment.id,
+        replacements: {
+          "{{placeholders}}": riskAssessmentScalarReplacements["{{placeholders}}"],
+        },
+      }),
+    );
 
-    const riskAssessmentTextQa = await verifyRiskAssessmentText({
-      documentId: riskAssessment.id,
-      input,
-    });
+    const riskAssessmentTextQa = await tracePackOperation(
+      traceGoogleWrite,
+      "riskAssessment.verifyText",
+      () =>
+        verifyRiskAssessmentText({
+          documentId: riskAssessment.id,
+          input,
+        }),
+    );
 
     let budget:
       | Awaited<ReturnType<typeof copyDriveFileToFolder>>
       | undefined;
     if (budgetDecision.shouldGenerateBudget) {
-      budget = await copyDriveFileToFolderOrReuse({
-        sourceFileId: config.budgetTemplateFileId!,
-        parentFolderId: folderId,
-        name: `${baseName} - Budget v${input.packVersion}`,
-        documentType: "budget",
-        reusedFiles,
-        updateExistingDrafts: input.updateExistingDrafts,
-        appProperties: documentAppProperties({
-          eventId: input.eventId,
-          packId,
-          packVersion: input.packVersion,
+      budget = await tracePackOperation(traceGoogleWrite, "budget.copyOrReuse", () =>
+        copyDriveFileToFolderOrReuse({
+          sourceFileId: config.budgetTemplateFileId!,
+          parentFolderId: folderId,
+          name: `${baseName} - Budget v${input.packVersion}`,
           documentType: "budget",
+          reusedFiles,
+          updateExistingDrafts: input.updateExistingDrafts,
+          appProperties: documentAppProperties({
+            eventId: input.eventId,
+            packId,
+            packVersion: input.packVersion,
+            documentType: "budget",
+          }),
         }),
-      });
+      );
 
       if (budget.mimeType !== GOOGLE_SHEET_MIME_TYPE) {
         throw new Error(
@@ -747,7 +837,9 @@ export default defineTool({
         );
       }
 
-      await fillBudgetSheet(budget.id, input);
+      await tracePackOperation(traceGoogleWrite, "budget.fillSheet", () =>
+        fillBudgetSheet(budget!.id, input),
+      );
     }
 
     const firstLinks: EventPackFileLinks = {
@@ -756,20 +848,27 @@ export default defineTool({
       budgetLink: budget?.webViewLink,
     };
 
-    const deadlinePlan = await createGoogleSheetOrReuse({
-      parentFolderId: folderId,
-      name: `${baseName} - Deadline Plan v${input.packVersion}`,
-      documentType: "deadline-plan-sheet",
-      reusedFiles,
-      updateExistingDrafts: input.updateExistingDrafts,
-      appProperties: documentAppProperties({
-        eventId: input.eventId,
-        packId,
-        packVersion: input.packVersion,
-        documentType: "deadline-plan-sheet",
-      }),
-    });
-    await fillGeneratedSheet(deadlinePlan.id, buildDeadlinePlanSheet(input));
+    const deadlinePlan = await tracePackOperation(
+      traceGoogleWrite,
+      "deadlinePlan.createOrReuse",
+      () =>
+        createGoogleSheetOrReuse({
+          parentFolderId: folderId,
+          name: `${baseName} - Deadline Plan v${input.packVersion}`,
+          documentType: "deadline-plan-sheet",
+          reusedFiles,
+          updateExistingDrafts: input.updateExistingDrafts,
+          appProperties: documentAppProperties({
+            eventId: input.eventId,
+            packId,
+            packVersion: input.packVersion,
+            documentType: "deadline-plan-sheet",
+          }),
+        }),
+    );
+    await tracePackOperation(traceGoogleWrite, "deadlinePlan.fillSheet", () =>
+      fillGeneratedSheet(deadlinePlan.id, buildDeadlinePlanSheet(input)),
+    );
 
     const deadlineTaskRows = buildDeadlineComplianceTaskRows(input);
     const accessibilityTaskRows = buildAccessibilityComplianceTaskRows(input);
@@ -783,74 +882,92 @@ export default defineTool({
       deadlinePlanLink: deadlinePlan.webViewLink,
       accessibilityTasksStatus,
     };
-    const fieldPack = await createGoogleSheetOrReuse({
-      parentFolderId: folderId,
-      name: `${baseName} - LSESU Form Field Pack v${input.packVersion}`,
-      documentType: "field-pack-sheet",
-      reusedFiles,
-      updateExistingDrafts: input.updateExistingDrafts,
-      appProperties: documentAppProperties({
-        eventId: input.eventId,
-        packId,
-        packVersion: input.packVersion,
-        documentType: "field-pack-sheet",
-      }),
-    });
+    const fieldPack = await tracePackOperation(
+      traceGoogleWrite,
+      "fieldPack.createOrReuse",
+      () =>
+        createGoogleSheetOrReuse({
+          parentFolderId: folderId,
+          name: `${baseName} - LSESU Form Field Pack v${input.packVersion}`,
+          documentType: "field-pack-sheet",
+          reusedFiles,
+          updateExistingDrafts: input.updateExistingDrafts,
+          appProperties: documentAppProperties({
+            eventId: input.eventId,
+            packId,
+            packVersion: input.packVersion,
+            documentType: "field-pack-sheet",
+          }),
+        }),
+    );
 
     const summaryLinks: EventPackFileLinks = {
       ...fieldPackLinks,
       fieldPackLink: fieldPack.webViewLink,
     };
-    const internalReviewSummary = await createGoogleDocWithTextOrReuse({
-      parentFolderId: folderId,
-      name: `${baseName} - Internal Review Summary v${input.packVersion}`,
-      text: buildInternalReviewSummaryBody(input, summaryLinks, budgetDecision),
-      documentType: "internal-review-summary",
-      reusedFiles,
-      updateExistingDrafts: input.updateExistingDrafts,
-      appProperties: documentAppProperties({
-        eventId: input.eventId,
-        packId,
-        packVersion: input.packVersion,
-        documentType: "internal-review-summary",
-      }),
-    });
+    const internalReviewSummary = await tracePackOperation(
+      traceGoogleWrite,
+      "internalReviewSummary.createOrReuse",
+      () =>
+        createGoogleDocWithTextOrReuse({
+          parentFolderId: folderId,
+          name: `${baseName} - Internal Review Summary v${input.packVersion}`,
+          text: buildInternalReviewSummaryBody(input, summaryLinks, budgetDecision),
+          documentType: "internal-review-summary",
+          reusedFiles,
+          updateExistingDrafts: input.updateExistingDrafts,
+          appProperties: documentAppProperties({
+            eventId: input.eventId,
+            packId,
+            packVersion: input.packVersion,
+            documentType: "internal-review-summary",
+          }),
+        }),
+    );
 
     const links: EventPackFileLinks = {
       ...summaryLinks,
       internalReviewSummaryLink: internalReviewSummary.webViewLink,
     };
-    await fillGeneratedSheet(fieldPack.id, buildFormFieldPackSheet(input, links));
+    await tracePackOperation(traceGoogleWrite, "fieldPack.fillSheet", () =>
+      fillGeneratedSheet(fieldPack.id, buildFormFieldPackSheet(input, links)),
+    );
 
     const trackerUpdates: unknown[] = [];
 
     if (input.updateTrackers) {
       trackerUpdates.push(
-        await upsertTrackerRow({
-          tabName: "Event Packs Index",
-          keyColumn: "Pack ID",
-          keyValue: packId,
-          row: buildPackIndexRow(input, links),
-          valueInputOption: "RAW",
-        }),
+        await tracePackOperation(traceGoogleWrite, "tracker.eventPacksIndex.upsert", () =>
+          upsertTrackerRow({
+            tabName: "Event Packs Index",
+            keyColumn: "Pack ID",
+            keyValue: packId,
+            row: buildPackIndexRow(input, links),
+            valueInputOption: "RAW",
+          }),
+        ),
       );
       trackerUpdates.push(
-        await upsertTrackerRow({
-          tabName: "Events Tracker",
-          keyColumn: "Event ID",
-          keyValue: input.eventId,
-          row: buildEventTrackerRow(input, links),
-          valueInputOption: "RAW",
-        }),
+        await tracePackOperation(traceGoogleWrite, "tracker.eventsTracker.upsert", () =>
+          upsertTrackerRow({
+            tabName: "Events Tracker",
+            keyColumn: "Event ID",
+            keyValue: input.eventId,
+            row: buildEventTrackerRow(input, links),
+            valueInputOption: "RAW",
+          }),
+        ),
       );
 
       trackerUpdates.push(
-        await upsertTrackerRows({
-          tabName: "Compliance Tasks",
-          keyColumn: "Task ID",
-          rows: complianceTaskRows,
-          valueInputOption: "RAW",
-        }),
+        await tracePackOperation(traceGoogleWrite, "tracker.complianceTasks.upsert", () =>
+          upsertTrackerRows({
+            tabName: "Compliance Tasks",
+            keyColumn: "Task ID",
+            rows: complianceTaskRows,
+            valueInputOption: "RAW",
+          }),
+        ),
       );
     }
     return {
@@ -909,7 +1026,3 @@ export default defineTool({
     };
   },
 });
-
-
-
-

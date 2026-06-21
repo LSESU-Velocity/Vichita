@@ -14,6 +14,8 @@ import {
   dateDisplaySortKey,
   displayDateFromEventDatePart,
   displayDateFromIsoDate,
+  isIsoCalendarDate,
+  isoDatePart,
 } from "../agent/lib/dateLabels.ts";
 import {
   createOrFindEventPackFolder,
@@ -327,6 +329,22 @@ test("event IDs round-trip when slug contains a hex-looking segment", () => {
   assert.equal(buildPackId("EVT-20260316-lse-a7f3-cafe"), "EVT-20260316-lse-a7f3-cafe-PACK-v1");
 });
 
+test("event identity rejects impossible calendar dates", () => {
+  assert.equal(parseEventId("EVT-20270230-global-build-cafe"), null);
+  assert.throws(
+    () =>
+      buildEventIdentity({
+        eventName: "Global Build 2027",
+        proposedDate: "2027-02-30",
+      }),
+    /real ISO calendar date/,
+  );
+  assert.throws(
+    () => buildPackId("EVT-20270230-global-build-cafe"),
+    /EVT-YYYYMMDD-event-slug-shortid/,
+  );
+});
+
 test("slack thread key is only created when both parts are present", () => {
   assert.equal(
     buildSlackThreadKey({ sourceSlackChannelId: "C1", sourceSlackThreadTs: "123.45" }),
@@ -341,6 +359,11 @@ test("event slugs stay lowercase ASCII", () => {
 test("human-facing dates use day-month-year while sort keys stay chronological", () => {
   assert.equal(displayDateFromIsoDate("2026-10-05"), "05-10-2026");
   assert.equal(displayDateFromEventDatePart("20261104"), "04-11-2026");
+  assert.equal(displayDateFromIsoDate("2027-02-30"), undefined);
+  assert.equal(displayDateFromEventDatePart("20270230"), undefined);
+  assert.equal(isIsoCalendarDate("2027-02-28"), true);
+  assert.equal(isIsoCalendarDate("2027-02-30"), false);
+  assert.equal(isoDatePart("2027-02-28"), "20270228");
   assert.equal(dateDisplaySortKey("05-10-2026"), "2026-10-05");
 });
 

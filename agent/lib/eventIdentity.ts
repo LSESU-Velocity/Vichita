@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { displayDateFromEventDatePart } from "./dateLabels.js";
+import { displayDateFromEventDatePart, isoDatePart } from "./dateLabels.js";
 
 const EVENT_ID_PATTERN =
   /^EVT-(?<datePart>\d{8})-(?<eventSlug>[a-z0-9]+(?:-[a-z0-9]+)*)-(?<shortId>[a-f0-9]{4,12})$/;
@@ -46,34 +46,14 @@ export function parseEventId(eventId: string) {
   const match = EVENT_ID_PATTERN.exec(eventId);
   if (!match?.groups) return null;
 
+  if (!displayDateFromEventDatePart(match.groups.datePart)) return null;
+
   return {
     eventId,
     datePart: match.groups.datePart,
     eventSlug: match.groups.eventSlug,
     shortId: match.groups.shortId,
   };
-}
-
-function parseIsoDate(value: string | undefined) {
-  if (!value) return null;
-
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-  if (!match) return null;
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return `${match[1]}${match[2]}${match[3]}`;
 }
 
 function datePartFromTimestamp(value: string | undefined) {
@@ -127,20 +107,27 @@ export function buildEventIdentity(input: EventIdentityInput): EventIdentity {
 
   const fallbackSlug = slugifyEventName(input.eventName);
   const eventSlug = existing?.eventSlug ?? fallbackSlug;
-  const proposedDatePart = parseIsoDate(input.proposedDate);
+  const trimmedProposedDate = input.proposedDate?.trim();
+  const proposedDatePart = isoDatePart(trimmedProposedDate);
+  if (trimmedProposedDate && !proposedDatePart) {
+    throw new Error(
+      "proposedDate must be a real ISO calendar date in YYYY-MM-DD format.",
+    );
+  }
   let usedCreationDateForId = false;
 
   let datePart = existing?.datePart ?? proposedDatePart;
   if (!datePart) {
-    datePart = datePartFromTimestamp(input.createdAtUtc);
+    const fallbackDatePart = datePartFromTimestamp(input.createdAtUtc);
+    if (!fallbackDatePart) {
+      throw new Error("createdAtUtc must be a valid timestamp when provided.");
+    }
+
+    datePart = fallbackDatePart;
     usedCreationDateForId = true;
     warnings.push(
-      "No valid proposedDate was supplied, so the Event ID uses the creation date.",
+      "No proposedDate was supplied, so the Event ID uses the creation date.",
     );
-  }
-
-  if (!datePart) {
-    throw new Error("createdAtUtc must be a valid timestamp when provided.");
   }
 
   const slackThreadKey = buildSlackThreadKey(input);

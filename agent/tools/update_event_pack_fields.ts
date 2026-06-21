@@ -3,7 +3,7 @@ import { always } from "eve/tools/approval";
 import type { drive_v3, sheets_v4 } from "googleapis";
 import { z } from "zod";
 
-import { displayDateFromIsoDate } from "../lib/dateLabels.js";
+import { displayDateFromIsoDate, isIsoCalendarDate } from "../lib/dateLabels.js";
 import {
   buildDeadlineComplianceTaskRows,
   buildDeadlinePlanSheet,
@@ -610,10 +610,19 @@ function updateLogText({
 
 export default defineTool({
   description:
-    "Approval-gated Google Workspace update. Patch known fields in an existing generated event pack without creating a new pack or regenerating unchanged documents. Use for corrections like changed venue, attendance, organiser details, first-aid plan, form-field answers, or explicit replacement deadline rows. If the user gives an event name but no folder link or Event ID, pass that visible eventName and let the tool find the unique existing pack or fail safely if ambiguous.",
+    "Approval-gated Google Workspace update. Patch known fields in an existing generated event pack without creating a new pack or regenerating unchanged documents. Use for corrections like changed venue, attendance, organiser details, first-aid plan, form-field answers, or explicit replacement deadline rows. Before this tool, emit only a short proposal, max 6 bullets or 120 words, then call it once and let the approval card handle consent. Do not generate a long staged summary, separate proceed question, or repeated approval calls in the same run. If the user gives an event name but no folder link or Event ID, pass that visible eventName and let the tool find the unique existing pack or fail safely if ambiguous.",
   inputSchema: Input,
   needsApproval: always(),
   async execute(input) {
+    if (
+      input.changes.proposedDate?.trim() &&
+      !isIsoCalendarDate(input.changes.proposedDate)
+    ) {
+      throw new Error(
+        "changes.proposedDate must be a real ISO calendar date in YYYY-MM-DD format. Ask the user to clarify impossible dates before updating the pack.",
+      );
+    }
+
     const drive = createDriveClient();
     const sheets = createSheetsClient();
     const packFolderId = input.packFolderId ?? packFolderIdFromLink(input.packFolderLink);

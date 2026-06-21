@@ -1,6 +1,8 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
+import { isIsoCalendarDate } from "../lib/dateLabels.js";
+
 const Input = z.object({
   eventName: z.string().optional(),
   eventDescription: z.string().optional(),
@@ -45,7 +47,11 @@ export default defineTool({
 
     if (missing(input.eventName)) critical.push("Event name");
     if (missing(input.eventDescription)) critical.push("Event description");
-    if (missing(input.proposedDate)) critical.push("Proposed date");
+    if (missing(input.proposedDate)) {
+      critical.push("Proposed date");
+    } else if (!isIsoCalendarDate(input.proposedDate)) {
+      critical.push("Real proposed date in YYYY-MM-DD format");
+    }
     if (missing(input.startTime)) critical.push("Start time");
     if (missing(input.endTime)) critical.push("End time");
     if (missing(input.location)) critical.push("Exact location");

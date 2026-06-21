@@ -3,6 +3,7 @@ import type { drive_v3 } from "googleapis";
 import {
   displayDateFromEventDatePart,
   displayDateFromIsoDate,
+  isIsoCalendarDate,
 } from "../dateLabels.js";
 import { buildSlackThreadKey } from "../eventIdentity.js";
 import { createDriveClient } from "./client.js";
@@ -191,9 +192,19 @@ export function eventPackFolderName({
   eventName: string;
   proposedDate?: string;
 }) {
+  const trimmedProposedDate = proposedDate?.trim();
+  if (
+    trimmedProposedDate &&
+    /^\d{4}-\d{2}-\d{2}$/.test(trimmedProposedDate) &&
+    !isIsoCalendarDate(trimmedProposedDate)
+  ) {
+    throw new Error(
+      "proposedDate must be a real ISO calendar date in YYYY-MM-DD format.",
+    );
+  }
   const datePrefix =
-    displayDateFromIsoDate(proposedDate) ??
-    proposedDate?.trim() ??
+    displayDateFromIsoDate(trimmedProposedDate) ??
+    trimmedProposedDate ??
     dateLabelFromEventId(eventId);
   const safeName = eventName
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
