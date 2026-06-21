@@ -610,7 +610,7 @@ function updateLogText({
 
 export default defineTool({
   description:
-    "Approval-gated Google Workspace update. Patch known fields in an existing generated event pack without creating a new pack or regenerating unchanged documents. Use for corrections like changed venue, attendance, organiser details, first-aid plan, form-field answers, or explicit replacement deadline rows.",
+    "Approval-gated Google Workspace update. Patch known fields in an existing generated event pack without creating a new pack or regenerating unchanged documents. Use for corrections like changed venue, attendance, organiser details, first-aid plan, form-field answers, or explicit replacement deadline rows. If the user gives an event name but no folder link or Event ID, pass that visible eventName and let the tool find the unique existing pack or fail safely if ambiguous.",
   inputSchema: Input,
   needsApproval: always(),
   async execute(input) {
