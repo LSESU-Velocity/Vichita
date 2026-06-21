@@ -9,6 +9,12 @@ import {
   slugifyEventName,
 } from "../agent/lib/eventIdentity.ts";
 import {
+  dateDisplaySortKey,
+  displayDateFromEventDatePart,
+  displayDateFromIsoDate,
+} from "../agent/lib/dateLabels.ts";
+import { eventPackFolderName } from "../agent/lib/googleWorkspace/drive.ts";
+import {
   buildColumnExpansionRequest,
   columnLetter,
   compareHeaders,
@@ -29,6 +35,7 @@ test("event identity is stable when Slack thread context is provided", () => {
   const second = buildEventIdentity(input);
 
   assert.equal(first.eventId, second.eventId);
+  assert.equal(first.displayDate, "04-11-2026");
   assert.equal(first.idempotencyKey, "slack-thread:C123:1770000000.123456");
   assert.equal(first.slackThreadKey, "slack-thread:C123:1770000000.123456");
   assert.match(first.eventId, /^EVT-20261104-ai-startup-sprint-[a-f0-9]{8}$/);
@@ -56,6 +63,29 @@ test("slack thread key is only created when both parts are present", () => {
 
 test("event slugs stay lowercase ASCII", () => {
   assert.equal(slugifyEventName("LSE Build: Café Night!"), "lse-build-cafe-night");
+});
+test("human-facing dates use day-month-year while sort keys stay chronological", () => {
+  assert.equal(displayDateFromIsoDate("2026-10-05"), "05-10-2026");
+  assert.equal(displayDateFromEventDatePart("20261104"), "04-11-2026");
+  assert.equal(dateDisplaySortKey("05-10-2026"), "2026-10-05");
+});
+
+test("event pack folder names are human-readable and keep IDs out of the visible name", () => {
+  assert.equal(
+    eventPackFolderName({
+      eventId: "EVT-20261005-notion-workshop-fd8d014a",
+      eventName: "Notion workshop",
+      proposedDate: "2026-10-05",
+    }),
+    "05-10-2026 - Notion workshop",
+  );
+  assert.equal(
+    eventPackFolderName({
+      eventId: "EVT-20261005-notion-workshop-fd8d014a",
+      eventName: "Bad / File: Name?",
+    }),
+    "05-10-2026 - Bad File Name",
+  );
 });
 
 test("tracker tab grid helpers allocate and expand enough columns for wide schemas", () => {

@@ -1,6 +1,12 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
+import {
+  dateDisplaySortKey,
+  displayDateFromIsoDate,
+  formatDateForDisplay,
+} from "../lib/dateLabels.js";
+
 const Route = z.enum([
   "regular_event_candidate",
   "large_event",
@@ -84,7 +90,7 @@ function parseIsoDate(value: string) {
 }
 
 function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return formatDateForDisplay(date);
 }
 
 function addCalendarDays(date: Date, days: number) {
@@ -311,6 +317,8 @@ export default defineTool({
     const term2LargeEventDeadline =
       input.term2LargeEventDeadline ??
       process.env.LSESU_TERM2_LARGE_EVENT_DEADLINE;
+    const displayRulesLastVerifiedDate =
+      displayDateFromIsoDate(rulesLastVerifiedDate) ?? rulesLastVerifiedDate;
 
     if (!eventDate) {
       return {
@@ -326,7 +334,7 @@ export default defineTool({
         timezone: "Europe/London",
         workingDayPolicy:
           "Monday-Friday only; excludes weekends but not bank holidays.",
-        rulesLastVerifiedDate,
+        rulesLastVerifiedDate: displayRulesLastVerifiedDate,
         rulesSourceSetId,
         disclaimer:
           "Draft aid only. Check current SU guidance and live forms before submission.",
@@ -617,7 +625,9 @@ export default defineTool({
       if (!first.dueDate && !second.dueDate) return 0;
       if (!first.dueDate) return 1;
       if (!second.dueDate) return -1;
-      return first.dueDate.localeCompare(second.dueDate);
+      return dateDisplaySortKey(first.dueDate).localeCompare(
+        dateDisplaySortKey(second.dueDate),
+      );
     });
 
     return {
@@ -630,7 +640,7 @@ export default defineTool({
       timezone: "Europe/London",
       workingDayPolicy:
         "Monday-Friday only; excludes weekends but not bank holidays.",
-      rulesLastVerifiedDate,
+      rulesLastVerifiedDate: displayRulesLastVerifiedDate,
       rulesSourceSetId,
       disclaimer:
         "Draft aid only. Check current SU guidance and live forms before submission.",

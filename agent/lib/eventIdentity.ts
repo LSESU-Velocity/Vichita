@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import { displayDateFromEventDatePart } from "./dateLabels.js";
+
 const EVENT_ID_PATTERN =
   /^EVT-(?<datePart>\d{8})-(?<eventSlug>[a-z0-9]+(?:-[a-z0-9]+)*)-(?<shortId>[a-f0-9]{4,12})$/;
 
@@ -17,6 +19,7 @@ export type EventIdentity = {
   eventId: string;
   eventSlug: string;
   datePart: string;
+  displayDate: string;
   shortId: string;
   version: 1;
   usedCreationDateForId: boolean;
@@ -155,6 +158,7 @@ export function buildEventIdentity(input: EventIdentityInput): EventIdentity {
     eventId,
     eventSlug,
     datePart,
+    displayDate: displayDateFromEventDatePart(datePart) ?? datePart,
     shortId,
     version: 1,
     usedCreationDateForId,

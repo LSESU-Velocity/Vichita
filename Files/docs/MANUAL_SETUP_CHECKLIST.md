@@ -4,6 +4,8 @@ Last updated: 2026-06-20
 
 Use this checklist for the full Vichita build, including MVP and later v2 modules.
 
+Human-facing dates should display as `DD-MM-YYYY`. Keep environment variables, source-set IDs, and API inputs in their documented machine formats.
+
 ## Current setup status
 
 Completed:

@@ -1,5 +1,9 @@
 import type { drive_v3 } from "googleapis";
 
+import {
+  displayDateFromEventDatePart,
+  displayDateFromIsoDate,
+} from "../dateLabels.js";
 import { buildSlackThreadKey } from "../eventIdentity.js";
 import { createDriveClient } from "./client.js";
 import { readGoogleWorkspaceConfig } from "./config.js";
@@ -142,7 +146,12 @@ async function createFolder({
   return response.data;
 }
 
-function eventPackFolderName({
+function dateLabelFromEventId(eventId: string) {
+  const match = /^EVT-(\d{8})-/.exec(eventId);
+  return displayDateFromEventDatePart(match?.[1]);
+}
+
+export function eventPackFolderName({
   eventId,
   eventName,
   proposedDate,
@@ -151,9 +160,17 @@ function eventPackFolderName({
   eventName: string;
   proposedDate?: string;
 }) {
-  const datePrefix = proposedDate?.trim() || eventId.slice(4, 12);
-  const safeName = eventName.replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ").trim();
-  return `${datePrefix} ${safeName || "Event"} (${eventId})`;
+  const datePrefix =
+    displayDateFromIsoDate(proposedDate) ??
+    proposedDate?.trim() ??
+    dateLabelFromEventId(eventId);
+  const safeName = eventName
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const displayName = safeName || "Event";
+
+  return datePrefix ? `${datePrefix} - ${displayName}` : displayName;
 }
 
 function uniqueFolders(folders: drive_v3.Schema$File[]) {

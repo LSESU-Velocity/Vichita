@@ -396,6 +396,8 @@ For MVP, the agent does not proactively police these gates. It shows them in the
 
 Use `Europe/London` timezone.
 
+Use `DD-MM-YYYY` for human-facing dates in Slack summaries, Drive folder names, tracker display formats, and generated documents. Keep Event IDs, API inputs, environment variables, and source-set IDs in their required machine formats such as `YYYY-MM-DD` or `EVT-YYYYMMDD-...`.
+
 Working-day calculations in MVP:
 
 - Monday-Friday only.
@@ -548,7 +550,7 @@ Vichita/
     Official Raw/
     Tagged Automation Copies/
   Event Packs/
-    YYYY-MM-DD Event Name/
+    DD-MM-YYYY - Event Name/
       Risk Assessment.docx or Google Doc
       Budget.xlsx or Google Sheet
       LSESU Form Field Pack Google Doc
@@ -1281,8 +1283,9 @@ Rules:
 - `YYYYMMDD` should use the proposed event date if known; otherwise use the creation date and mark the event date as missing.
 - `event-slug` should be a lowercase ASCII slug derived from the event name.
 - `shortid` should be stable for the event. If Slack channel/thread context is available, derive it deterministically from that context plus the event date/name; otherwise generate it once and reuse the resulting Event ID.
+- Use human-readable event pack folder names, for example `05-10-2026 - Notion workshop`.
 - Store the Event ID in:
-  - Event pack folder name.
+  - Drive file/folder app properties.
   - Events Tracker row.
   - Event Packs Index row.
   - Compliance Tasks rows.
