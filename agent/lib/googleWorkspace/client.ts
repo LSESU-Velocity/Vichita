@@ -29,6 +29,13 @@ export function createSheetsClient() {
   });
 }
 
+export function createDocsClient() {
+  return google.docs({
+    version: "v1",
+    auth: createGoogleAuthClient(),
+  });
+}
+
 export function googleApiErrorSummary(error: unknown) {
   const candidate = error as {
     code?: number;
@@ -50,3 +57,4 @@ export function googleApiErrorSummary(error: unknown) {
       : [],
   };
 }
+

@@ -1,0 +1,998 @@
+import { buildPackId } from "./eventIdentity.js";
+import { displayDateFromIsoDate } from "./dateLabels.js";
+
+export type EventRoute =
+  | "regular_event_candidate"
+  | "large_event"
+  | "speaker_event"
+  | "large_speaker_event"
+  | "trip_process"
+  | "needs_human_review";
+
+export type EventSpeaker = {
+  name?: string;
+  role?: string;
+  organisation?: string;
+  topic?: string;
+};
+
+export type DeadlinePlanItem = {
+  task: string;
+  dueDate?: string;
+  deadlineType?: string;
+  sourceRule?: string;
+  blocksFinalSubmissionReadiness?: boolean;
+  notes?: string[];
+};
+
+export type BudgetLineItem = {
+  description: string;
+  pricePerItem: number;
+  quantity: number;
+  notes?: string;
+};
+
+export type BudgetIncomeLine = {
+  pricePerItem: number;
+  quantity: number;
+  notes?: string;
+};
+
+export type BudgetInput = {
+  expenses?: BudgetLineItem[];
+  income?: {
+    memberTicket?: BudgetIncomeLine;
+    nonMemberTicket?: BudgetIncomeLine;
+    nonLseTicket?: BudgetIncomeLine;
+    sponsorship?: BudgetIncomeLine;
+    societyAccountContribution?: BudgetIncomeLine;
+    sufRequested?: BudgetIncomeLine;
+    otherIncome?: BudgetIncomeLine;
+  };
+};
+
+export type EventPackInput = {
+  eventId: string;
+  eventName: string;
+  eventDescription?: string;
+  proposedDate?: string;
+  setupStartTime?: string;
+  eventStartTime?: string;
+  eventEndTime?: string;
+  expectedAttendance?: number;
+  preferredLocation?: string;
+  externalVenueDetails?: string;
+  organiserName?: string;
+  organiserRole?: string;
+  organiserLseEmail?: string;
+  organiserContactNumber?: string;
+  firstAidPlan?: string;
+  isRepeatedEvent?: boolean;
+  repeatedEventDates?: string;
+  accessibilityPlan?: string;
+  accessibilityContactOrRequestRoute?: string;
+  externalSpeakers?: EventSpeaker[];
+  academicChairStatus?: string;
+  academicChairNameEmail?: string;
+  externalOrganisationInvolved?: boolean;
+  externalOrganisationName?: string;
+  sponsorInvolved?: boolean;
+  sponsorName?: string;
+  estimatedCost?: number;
+  societyBalanceEstimate?: number;
+  foodOrRefreshments?: boolean;
+  alcohol?: boolean;
+  publicOrNonLseAttendees?: boolean;
+  under18sOrVulnerableAdults?: boolean;
+  filmScreening?: boolean;
+  tripBeyondM25?: boolean;
+  overnightTrip?: boolean;
+  externalVenue?: boolean;
+  classificationRoute?: EventRoute;
+  classificationReason?: string;
+  triggers?: string[];
+  missingCriticalFields?: string[];
+  blocksFinalSubmissionReadiness?: string[];
+  ticketingPlan?: string;
+  attendeeRegistrationEntryPlan?: string;
+  publicEventAcademicChairNote?: string;
+  sufStatus?: string;
+  contractsAttachedStatus?: string;
+  tripType?: string;
+  transportPlan?: string;
+  accommodationPlan?: string;
+  societyLedExplanation?: string;
+  highRiskOrHighProfileSpeaker?: boolean;
+  budget?: BudgetInput;
+  deadlines?: DeadlinePlanItem[];
+  generatedAtUtc?: string;
+  generatedBy?: string;
+  packVersion?: number;
+  rulesLastVerifiedDate?: string;
+  rulesSourceSetId?: string;
+};
+
+export type EventPackFileLinks = {
+  packFolderLink?: string;
+  riskAssessmentLink?: string;
+  budgetLink?: string;
+  fieldPackLink?: string;
+  accessibilityChecklistLink?: string;
+  deadlinePlanLink?: string;
+  internalReviewSummaryLink?: string;
+};
+
+export type RiskRow = {
+  hazardIdentified: string;
+  whyHazard: string;
+  whoAtRisk: string;
+  riskScore: string;
+  actionsBeforeEvent: string;
+  actionsDuringEvent: string;
+  owner: string;
+};
+
+export type BudgetRequirement = {
+  shouldGenerateBudget: boolean;
+  required: boolean;
+  requiredReasons: string[];
+  planningReasons: string[];
+  reasons: string[];
+};
+
+export type SheetValueUpdate = {
+  range: string;
+  values: Array<Array<string | number>>;
+  valueInputOption: "RAW" | "USER_ENTERED";
+};
+
+const SOCIETY_NAME = "LSESU Velocity";
+const DEFAULT_RULES_LAST_VERIFIED = "not provided";
+const DEFAULT_RULES_SOURCE_SET = "not provided";
+const FIELD_PACK_DISCLAIMER =
+  "Draft aid only. LSESU's current published guidance and the live form/template are authoritative. This was generated for internal Velocity review and must be checked before submission.";
+
+function text(value: string | undefined, fallback = "TBC") {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+}
+
+function yesNo(value: boolean | undefined) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "TBC";
+}
+
+function displayDate(value: string | undefined) {
+  return displayDateFromIsoDate(value) ?? text(value);
+}
+
+function generatedDisplayDate(input: EventPackInput) {
+  const generatedAt = input.generatedAtUtc
+    ? new Date(input.generatedAtUtc)
+    : new Date();
+
+  if (Number.isNaN(generatedAt.getTime())) return text(input.generatedAtUtc);
+  return `${String(generatedAt.getUTCDate()).padStart(2, "0")}-${String(
+    generatedAt.getUTCMonth() + 1,
+  ).padStart(2, "0")}-${generatedAt.getUTCFullYear()}`;
+}
+
+function eventDateTimeWithSetup(input: EventPackInput) {
+  const date = displayDate(input.proposedDate);
+  const setup = text(input.setupStartTime);
+  const start = text(input.eventStartTime);
+  const end = text(input.eventEndTime);
+
+  return `${date}, setup ${setup}, event ${start}-${end}`;
+}
+
+function routeLabel(route: EventRoute | undefined) {
+  switch (route) {
+    case "regular_event_candidate":
+      return "Regular Event candidate";
+    case "large_event":
+      return "Large Event";
+    case "speaker_event":
+      return "Speaker Event";
+    case "large_speaker_event":
+      return "Large/Speaker Event";
+    case "trip_process":
+      return "Trip process";
+    case "needs_human_review":
+      return "Needs human review";
+    default:
+      return "TBC";
+  }
+}
+
+function hasSpeakers(input: EventPackInput) {
+  return (input.externalSpeakers ?? []).length > 0;
+}
+
+function listOrNone(values: string[] | undefined) {
+  const filtered = (values ?? []).map((value) => value.trim()).filter(Boolean);
+  if (filtered.length === 0) return "- None recorded";
+  return filtered.map((value) => `- ${value}`).join("\n");
+}
+
+function speakerDetails(input: EventPackInput) {
+  const speakers = input.externalSpeakers ?? [];
+  if (speakers.length === 0) return "No external speakers recorded.";
+
+  return speakers
+    .map((speaker, index) => {
+      const parts = [
+        text(speaker.name, `Speaker ${index + 1}`),
+        text(speaker.role, "role TBC"),
+        text(speaker.organisation, "organisation TBC"),
+        text(speaker.topic, "topic TBC"),
+      ];
+      return `${index + 1}. ${parts.join(", ")}`;
+    })
+    .join("\n");
+}
+
+function speakerTopics(input: EventPackInput) {
+  const topics = (input.externalSpeakers ?? [])
+    .map((speaker) => speaker.topic?.trim())
+    .filter((topic): topic is string => Boolean(topic));
+
+  return topics.length > 0 ? topics.join("; ") : "TBC";
+}
+
+function submissionReadiness(input: EventPackInput) {
+  const blockers = [
+    ...(input.missingCriticalFields ?? []),
+    ...(input.blocksFinalSubmissionReadiness ?? []),
+  ].filter((value, index, values) => value.trim() && values.indexOf(value) === index);
+
+  if (blockers.length === 0) {
+    return "Draft generated, ready for internal committee review.";
+  }
+
+  return `Draft generated, final submission readiness blocked by: ${blockers.join(
+    "; ",
+  )}.`;
+}
+
+function riskOwner(input: EventPackInput) {
+  return text(input.organiserName, "Velocity event lead");
+}
+
+function riskScore(
+  score: string,
+  input: EventPackInput,
+  requiresLocation = false,
+  requiresFirstAid = false,
+) {
+  if (requiresLocation && !input.preferredLocation?.trim()) {
+    return "TBC - committee to confirm";
+  }
+  if (requiresFirstAid && !input.firstAidPlan?.trim()) {
+    return "TBC - committee to confirm";
+  }
+  return score;
+}
+
+export function buildRiskRows(input: EventPackInput) {
+  const owner = riskOwner(input);
+  const attendance = input.expectedAttendance ?? "TBC";
+  const location = text(input.preferredLocation, "the confirmed venue");
+
+  const coreRisks: RiskRow[] = [
+    {
+      hazardIdentified: "Capacity Control",
+      whyHazard:
+        "Overcrowding or unclear capacity controls can create unsafe movement, queuing, or room-capacity issues.",
+      whoAtRisk: "Attendees, committee members, venue staff, and speakers.",
+      riskScore:
+        typeof input.expectedAttendance === "number"
+          ? "4 (2 x 2)"
+          : "TBC - committee to confirm",
+      actionsBeforeEvent: `Confirm expected attendance (${attendance}) against venue capacity. Use registration or sign-in where needed and keep an attendee-counting plan.`,
+      actionsDuringEvent:
+        "Committee lead monitors entry, pauses admissions if capacity is reached, and keeps exits clear.",
+      owner,
+    },
+    {
+      hazardIdentified: "Crowd Control",
+      whyHazard:
+        "Arrival, departure, queues, or clustered networking can cause congestion and make evacuation harder.",
+      whoAtRisk: "Attendees, committee members, venue staff, and speakers.",
+      riskScore: riskScore("4 (2 x 2)", input, true),
+      actionsBeforeEvent: `Confirm room layout and arrival/departure flow for ${location}. Brief committee volunteers on entry, exit, and queue management.`,
+      actionsDuringEvent:
+        "Keep aisles and exits clear, spread committee volunteers around the room, and escalate crowding concerns to venue/SU staff.",
+      owner,
+    },
+    {
+      hazardIdentified: "Electrical Hazards",
+      whyHazard:
+        "Laptops, chargers, AV equipment, cables, and extension leads can create electric shock or trip hazards.",
+      whoAtRisk: "Attendees, committee members, speakers, and venue staff.",
+      riskScore: "4 (2 x 2)",
+      actionsBeforeEvent:
+        "Use venue-approved AV equipment where possible. Keep cables taped down or away from walkways and avoid overloading sockets.",
+      actionsDuringEvent:
+        "Committee checks walkways remain clear and reports faulty equipment to venue staff. Do not improvise unsafe electrical setups.",
+      owner,
+    },
+    {
+      hazardIdentified: "Fire Hazards",
+      whyHazard:
+        "Blocked exits, overcrowding, electrical faults, or unclear evacuation routes can worsen a fire incident.",
+      whoAtRisk: "Attendees, committee members, speakers, and venue staff.",
+      riskScore: riskScore("4 (2 x 2)", input, true),
+      actionsBeforeEvent:
+        "Confirm fire exits, evacuation route, and room-capacity limits with the venue. Do not block exits with furniture, bags, or queues.",
+      actionsDuringEvent:
+        "Follow venue evacuation instructions immediately. Committee members help attendees leave calmly and do not re-enter until cleared.",
+      owner,
+    },
+    {
+      hazardIdentified: "First Aid Emergencies",
+      whyHazard:
+        "Illness, injury, panic, allergic reactions, or other medical issues may need immediate support.",
+      whoAtRisk: "Attendees, committee members, speakers, and venue staff.",
+      riskScore: riskScore("TBC - committee to confirm", input, false, true),
+      actionsBeforeEvent: text(
+        input.firstAidPlan,
+        "Confirm first-aid plan, nearest first-aid support, emergency contact route, and who will call venue/security help if needed.",
+      ),
+      actionsDuringEvent:
+        "Stop the activity if needed, call venue/security/emergency support, record the incident according to SU/venue process, and preserve privacy.",
+      owner,
+    },
+    {
+      hazardIdentified: "Trips, Slips and Falls",
+      whyHazard:
+        "Cables, bags, furniture movement, spilled drinks, and poor lighting can cause falls.",
+      whoAtRisk: "Attendees, committee members, speakers, and venue staff.",
+      riskScore: "4 (2 x 2)",
+      actionsBeforeEvent:
+        "Keep walkways clear, tape down unavoidable cables, check lighting, and agree where bags/coats should be kept.",
+      actionsDuringEvent:
+        "Committee monitors for spills or obstructions, clears issues quickly, and reports venue hazards.",
+      owner,
+    },
+  ];
+
+  const activityRisks: RiskRow[] = [];
+
+  if (input.foodOrRefreshments) {
+    activityRisks.push({
+      hazardIdentified: "Food, Allergens, and Hygiene",
+      whyHazard:
+        "Food or drinks can create allergy, hygiene, spill, or dietary-exclusion risks.",
+      whoAtRisk: "Attendees, committee members, speakers, and catering staff.",
+      riskScore: "6 (2 x 3)",
+      actionsBeforeEvent:
+        "Confirm supplier/catering route, allergen information, dietary labels, and food handling responsibilities. Keep an accessibility/dietary contact route visible.",
+      actionsDuringEvent:
+        "Display allergen information, avoid cross-contamination where possible, clear spills quickly, and escalate allergy incidents immediately.",
+      owner,
+    });
+  }
+
+  if (input.alcohol) {
+    activityRisks.push({
+      hazardIdentified: "Alcohol",
+      whyHazard:
+        "Alcohol can increase risks around behaviour, consent, dehydration, and safe departure.",
+      whoAtRisk: "Attendees, committee members, venue staff, and the public.",
+      riskScore: "6 (2 x 3)",
+      actionsBeforeEvent:
+        "Confirm whether alcohol is central to the event, venue licensing arrangements, age controls, non-alcoholic options, and safe-departure plan.",
+      actionsDuringEvent:
+        "Committee monitors welfare, does not pressure drinking, supports anyone unwell, and escalates behavioural concerns to venue/SU/security staff.",
+      owner,
+    });
+  }
+
+  if (hasSpeakers(input)) {
+    activityRisks.push({
+      hazardIdentified: "External Speakers",
+      whyHazard:
+        "Speaker approval, topic sensitivity, attendee questions, or publicity can create compliance and safety risks.",
+      whoAtRisk: "Speakers, attendees, committee members, and the society.",
+      riskScore: input.highRiskOrHighProfileSpeaker
+        ? "TBC - committee to confirm"
+        : "4 (2 x 2)",
+      actionsBeforeEvent:
+        "Provide speaker names, roles, organisations, and topics in the event form. Confirm academic-chair applicability and do not advertise speakers until SU approval.",
+      actionsDuringEvent:
+        "Keep a named committee lead present, manage Q&A respectfully, and escalate disruption or safety concerns to venue/SU/security staff.",
+      owner,
+    });
+  }
+
+  if (input.publicOrNonLseAttendees) {
+    activityRisks.push({
+      hazardIdentified: "Public or Non-LSE Attendees",
+      whyHazard:
+        "Open attendance can increase identity, access-control, safeguarding, and capacity risks.",
+      whoAtRisk: "Attendees, committee members, speakers, and venue staff.",
+      riskScore: "6 (2 x 3)",
+      actionsBeforeEvent:
+        "Confirm entry route, ticketing/access list, guest expectations, and any academic-chair or security requirements.",
+      actionsDuringEvent:
+        "Check entry against the approved plan, monitor capacity, and keep committee contact visible for attendee issues.",
+      owner,
+    });
+  }
+
+  if (input.sponsorInvolved || input.externalOrganisationInvolved) {
+    activityRisks.push({
+      hazardIdentified: "Sponsor or External Organisation Involvement",
+      whyHazard:
+        "External involvement can create ownership, approval, branding, data, contract, or Careers-process risks.",
+      whoAtRisk: "Attendees, committee members, the society, and external partners.",
+      riskScore: "TBC - committee to confirm",
+      actionsBeforeEvent:
+        "Confirm the event is society-led, sponsorship/branding approvals are clear, Careers contact is considered where relevant, and no attendee data is shared without approval.",
+      actionsDuringEvent:
+        "Keep committee control of the event, avoid unapproved sponsor deliverables, and record issues for post-event review.",
+      owner,
+    });
+  }
+
+  if (input.under18sOrVulnerableAdults) {
+    activityRisks.push({
+      hazardIdentified: "Under-18s or Vulnerable Adults",
+      whyHazard:
+        "Safeguarding, supervision, DBS, consent, and welfare requirements may apply.",
+      whoAtRisk: "Under-18s, vulnerable adults, attendees, committee members, and the society.",
+      riskScore: "TBC - committee to confirm",
+      actionsBeforeEvent:
+        "Confirm safeguarding route, supervision, DBS considerations, consent requirements, and SU guidance before final readiness.",
+      actionsDuringEvent:
+        "Follow the confirmed safeguarding plan and escalate concerns immediately through the agreed route.",
+      owner,
+    });
+  }
+
+  if (input.externalVenue) {
+    activityRisks.push({
+      hazardIdentified: "External Venue",
+      whyHazard:
+        "External venues may have different evacuation, accessibility, insurance, licensing, and staff-support arrangements.",
+      whoAtRisk: "Attendees, committee members, speakers, venue staff, and the public.",
+      riskScore: "TBC - committee to confirm",
+      actionsBeforeEvent:
+        "Confirm venue risk information, accessibility, insurance/licensing expectations, emergency contacts, and arrival/departure route.",
+      actionsDuringEvent:
+        "Follow venue staff instructions, keep committee contact visible, and record/report any incidents through the agreed process.",
+      owner,
+    });
+  }
+
+  return { coreRisks, activityRisks };
+}
+
+export function buildRiskAssessmentScalarReplacements(input: EventPackInput) {
+  const dateCompleted = generatedDisplayDate(input);
+
+  return {
+    "{{society_name}}": SOCIETY_NAME,
+    "{{event_name}}": input.eventName,
+    "{{event_organiser_name}}": text(input.organiserName),
+    "{{event_organiser_lse_email}}": text(input.organiserLseEmail),
+    "{{event_organiser_contact_number}}": text(input.organiserContactNumber),
+    "{{event_dates_times}}": eventDateTimeWithSetup(input),
+    "{{event_location}}": text(input.preferredLocation),
+    "{{first_aid_plan}}": text(input.firstAidPlan),
+    "{{date_completed}}": dateCompleted,
+    "{{placeholders}}": "draft fields",
+  };
+}
+
+export function budgetRequirement(
+  input: EventPackInput,
+  includeBudget: "auto" | "always" | "never" = "auto",
+): BudgetRequirement {
+  const requiredReasons: string[] = [];
+  const planningReasons: string[] = [];
+  const overCostThreshold =
+    typeof input.estimatedCost === "number" && input.estimatedCost > 500;
+  const overBalanceThreshold =
+    typeof input.estimatedCost === "number" &&
+    typeof input.societyBalanceEstimate === "number" &&
+    input.societyBalanceEstimate > 0 &&
+    input.estimatedCost > input.societyBalanceEstimate * 0.5;
+  const required = overCostThreshold || overBalanceThreshold;
+
+  if (overCostThreshold) {
+    requiredReasons.push("Estimated event cost is over GBP 500.");
+  }
+
+  if (overBalanceThreshold) {
+    requiredReasons.push(
+      "Estimated event cost is over 50% of the society balance estimate.",
+    );
+  }
+
+  if (includeBudget === "always") {
+    planningReasons.push("Budget sheet explicitly requested for internal planning.");
+  }
+
+  const reasons = [...requiredReasons, ...planningReasons];
+
+  return {
+    shouldGenerateBudget:
+      includeBudget !== "never" && (required || planningReasons.length > 0),
+    required,
+    requiredReasons,
+    planningReasons,
+    reasons,
+  };
+}
+
+function blankTextRows(count: number) {
+  return Array.from({ length: count }, () => [""] as [string]);
+}
+
+function blankNumberRows(count: number) {
+  return Array.from({ length: count }, () => ["", ""] as [string | number, string | number]);
+}
+
+function normalizeExpenses(input: EventPackInput) {
+  const explicit = (input.budget?.expenses ?? []).slice(0, 10);
+  if (explicit.length > 0) return explicit;
+
+  if (typeof input.estimatedCost === "number" && input.estimatedCost > 0) {
+    return [
+      {
+        description: "Estimated event costs",
+        pricePerItem: input.estimatedCost,
+        quantity: 1,
+        notes:
+          "Placeholder planning estimate. Committee should replace with itemised costs before submission.",
+      },
+    ];
+  }
+
+  return [];
+}
+
+function incomeRow(value: BudgetIncomeLine | undefined) {
+  return [value?.pricePerItem ?? "", value?.quantity ?? ""] as [
+    string | number,
+    string | number,
+  ];
+}
+
+function incomeNote(value: BudgetIncomeLine | undefined) {
+  return [value?.notes ?? ""] as [string];
+}
+
+export function buildBudgetSheetUpdates(input: EventPackInput): SheetValueUpdate[] {
+  const expenses = normalizeExpenses(input);
+  const expenseDescriptions = blankTextRows(10);
+  const expenseNumbers = blankNumberRows(10);
+  const expenseNotes = blankTextRows(10);
+
+  expenses.forEach((expense, index) => {
+    expenseDescriptions[index] = [expense.description];
+    expenseNumbers[index] = [expense.pricePerItem, expense.quantity];
+    expenseNotes[index] = [expense.notes ?? ""];
+  });
+
+  const income = input.budget?.income ?? {};
+  const incomeRows = [
+    incomeRow(income.memberTicket),
+    incomeRow(income.nonMemberTicket),
+    incomeRow(income.nonLseTicket),
+    incomeRow(income.sponsorship),
+    incomeRow(income.societyAccountContribution),
+    incomeRow(income.sufRequested),
+    incomeRow(income.otherIncome),
+  ];
+  const incomeNotes = [
+    incomeNote(income.memberTicket),
+    incomeNote(income.nonMemberTicket),
+    incomeNote(income.nonLseTicket),
+    incomeNote(income.sponsorship),
+    incomeNote(income.societyAccountContribution),
+    incomeNote(income.sufRequested),
+    incomeNote(income.otherIncome),
+  ];
+
+  return [
+    {
+      range: "'Budget Template'!C3:C4",
+      values: [[SOCIETY_NAME], [input.eventName]],
+      valueInputOption: "RAW",
+    },
+    {
+      range: "'Budget Template'!B7:B16",
+      values: expenseDescriptions,
+      valueInputOption: "RAW",
+    },
+    {
+      range: "'Budget Template'!C7:D16",
+      values: expenseNumbers,
+      valueInputOption: "USER_ENTERED",
+    },
+    {
+      range: "'Budget Template'!F7:F16",
+      values: expenseNotes,
+      valueInputOption: "RAW",
+    },
+    {
+      range: "'Budget Template'!C20:D26",
+      values: incomeRows,
+      valueInputOption: "USER_ENTERED",
+    },
+    {
+      range: "'Budget Template'!F20:F26",
+      values: incomeNotes,
+      valueInputOption: "RAW",
+    },
+  ];
+}
+
+function attachmentLine(label: string, value: string | undefined) {
+  return `- ${label}: ${value ?? "TBC"}`;
+}
+
+export function buildFormFieldPackBody(
+  input: EventPackInput,
+  links: EventPackFileLinks = {},
+) {
+  const route = input.classificationRoute;
+  const routeIsRegular = route === "regular_event_candidate";
+  const routeIsTrip = route === "trip_process";
+  const generatedOn = generatedDisplayDate(input);
+  const rulesLastVerifiedDate =
+    input.rulesLastVerifiedDate ?? DEFAULT_RULES_LAST_VERIFIED;
+  const heading = routeIsRegular
+    ? "Regular Event Form Field Pack"
+    : routeIsTrip
+      ? "Trips Process Field Pack"
+      : "Large / Speaker Event Form Field Pack";
+  const fieldSectionHeading = routeIsRegular
+    ? "Event Fields"
+    : routeIsTrip
+      ? "Trip Event Fields"
+      : "Core Event Fields";
+  const regularOnlyRows = routeIsRegular
+    ? `| Confirmation: no external speakers | ${hasSpeakers(input) ? "No, external speakers are recorded, use Speaker/Large route." : "Confirmed from current intake, no external speakers recorded."} |
+`
+    : "";
+  const publicAcademicChairRow = routeIsRegular
+    ? `| Public/open academic chair note, if relevant | ${text(input.publicEventAcademicChairNote, input.publicOrNonLseAttendees ? "Needs checking because public/non-LSE attendance is in scope." : "Not indicated.")} |
+`
+    : "";
+  const largeOnlyOpeningRows = !routeIsRegular && !routeIsTrip
+    ? "| Is this sports training or a match? | No |\n"
+    : "";
+  const under18sRowLabel = !routeIsRegular && !routeIsTrip
+    ? "Under-18s / schools / vulnerable adults / DBS details"
+    : "Under-18s / vulnerable adults involved?";
+  const under18sRowAnswer = !routeIsRegular && !routeIsTrip
+    ? input.under18sOrVulnerableAdults
+      ? "Yes, details and DBS/safeguarding route need confirmation."
+      : "No / not indicated from current intake."
+    : yesNo(input.under18sOrVulnerableAdults);
+  const largeOnlyClosingRows = !routeIsRegular && !routeIsTrip
+    ? `| SUF status | ${text(input.sufStatus)} |
+| Contracts attached? | ${text(input.contractsAttachedStatus)} |
+`
+    : "";
+
+  const common = `# ${heading}
+
+${FIELD_PACK_DISCLAIMER} Rules/templates last manually verified on ${rulesLastVerifiedDate}.
+
+## Submission Metadata
+
+- Event ID: ${input.eventId}
+- Form route: ${routeIsRegular ? "Regular Event Form" : routeIsTrip ? "Trips process" : "Large Event or Speaker Event Form"}
+- Event classification: ${routeLabel(route)}
+- Classification reason: ${text(input.classificationReason)}
+- Submission readiness: ${submissionReadiness(input)}
+- Generated on: ${generatedOn}
+- Rules source set: ${input.rulesSourceSetId ?? DEFAULT_RULES_SOURCE_SET}
+- Official submission: Humans submit the current live SU/Podio form manually.
+
+## ${fieldSectionHeading}
+
+| Official form field | Draft answer |
+|---|---|
+| What is the name of your event? | ${input.eventName} |
+| What type of group are you submitting on behalf of? | Society |
+| What club/society are you submitting on behalf of? | ${SOCIETY_NAME} |
+${largeOnlyOpeningRows}| Name of Student Lead | ${text(input.organiserName)} |
+| Committee Role | ${text(input.organiserRole)} |
+| LSE Email Address | ${text(input.organiserLseEmail)} |
+| Date and time of activity, including setup time | ${eventDateTimeWithSetup(input)} |
+| Is your activity repeated across multiple dates? | ${yesNo(input.isRepeatedEvent)} |
+| Repeated dates, if any | ${text(input.repeatedEventDates)} |
+| Preferred event location | ${text(input.preferredLocation)} |
+| External venue details, if relevant | ${text(input.externalVenueDetails)} |
+${regularOnlyRows}| Overview of the event | ${text(input.eventDescription)} |
+| Who will be attending? | ${input.publicOrNonLseAttendees ? "LSE students plus public/non-LSE attendees, confirm access controls." : "Primarily LSE students/Velocity community, confirm final audience."} |
+${publicAcademicChairRow}| Approximate number of attendees | ${input.expectedAttendance ?? "TBC"} |
+| ${under18sRowLabel} | ${under18sRowAnswer} |
+| Film screening? | ${yesNo(input.filmScreening)} |
+| Food or refreshments? | ${yesNo(input.foodOrRefreshments)} |
+| Alcohol? | ${yesNo(input.alcohol)} |
+| Ticketing | ${text(input.ticketingPlan)} |
+| Attendee registration / entry plan | ${text(input.attendeeRegistrationEntryPlan)} |
+${largeOnlyClosingRows}| Total event cost | ${typeof input.estimatedCost === "number" ? `GBP ${input.estimatedCost}` : "TBC"} |
+| Risk Assessment attached? | ${links.riskAssessmentLink ? "Draft linked below" : "TBC"} |
+| Budget attached? | ${links.budgetLink ? "Draft linked below" : "Not generated or TBC"} |
+`;
+
+  if (routeIsRegular) {
+    return `${common}
+## Regular Event Route Checks
+
+- External speaker route check: ${hasSpeakers(input) ? "External speakers are recorded; use Speaker/Large route." : "No external speakers recorded from current intake."}
+- Public/open academic chair check: ${text(input.publicEventAcademicChairNote, input.publicOrNonLseAttendees ? "Needs checking because public/non-LSE attendance is in scope." : "Not indicated.")}
+
+## Attachment Checklist
+
+${attachmentLine("Risk Assessment", links.riskAssessmentLink)}
+${attachmentLine("Budget, if required or useful", links.budgetLink)}
+${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Deadline plan", links.deadlinePlanLink)}
+${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
+
+## Missing Information
+
+${listOrNone(input.missingCriticalFields)}
+`;
+  }
+
+  if (routeIsTrip) {
+    return `${common}
+## Trips Process Fields
+
+| Trips field | Draft answer |
+|---|---|
+| Trip type | ${text(input.tripType)} |
+| Beyond the M25? | ${yesNo(input.tripBeyondM25)} |
+| Overnight stay? | ${yesNo(input.overnightTrip)} |
+| Transport plan | ${text(input.transportPlan)} |
+| Accommodation plan, if relevant | ${text(input.accommodationPlan)} |
+| Trips process note | Use the SU trips process rather than the ordinary event form. Verify current trip guidance before final readiness. |
+
+## Attachment Checklist
+
+${attachmentLine("Risk Assessment", links.riskAssessmentLink)}
+${attachmentLine("Budget, if required or useful", links.budgetLink)}
+${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Deadline plan", links.deadlinePlanLink)}
+${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
+
+## Missing Information
+
+${listOrNone(input.missingCriticalFields)}
+`;
+  }
+
+  return `${common}
+## External Speaker Fields
+
+| Official form field | Draft answer |
+|---|---|
+| External speakers? | ${hasSpeakers(input) ? "Yes" : "No / TBC"} |
+| Full names, job titles, organisations, and descriptions of speakers | ${speakerDetails(input)} |
+| What topics will speakers be discussing? | ${speakerTopics(input)} |
+| Academic Chair status | ${text(input.academicChairStatus, hasSpeakers(input) ? "Needs checking" : "Not applicable")} |
+| Academic Chair full name and email, if confirmed | ${text(input.academicChairNameEmail)} |
+| Speaker approval status | Not approved until SU confirms. |
+| Promotion gate | Speaker promotion blocked until SU speaker approval is clear. |
+
+## External Organisation / Sponsor Fields
+
+| Official form field | Draft answer |
+|---|---|
+| External organisation involved? | ${yesNo(input.externalOrganisationInvolved)} |
+| Organisation name | ${text(input.externalOrganisationName)} |
+| How is the event society-led and fully organised by Velocity? | ${text(input.societyLedExplanation)} |
+| Sponsor / employer involvement details | ${input.sponsorInvolved ? text(input.sponsorName, "Sponsor involved, details TBC") : "No sponsor recorded."} |
+| LSE Careers contact required? | ${input.externalOrganisationInvolved || input.sponsorInvolved ? "Needs checking for employer/careers-style event." : "Not indicated."} |
+| Sponsorship contract status | ${input.sponsorInvolved ? "Needs sponsorship process check before final readiness." : "Not indicated."} |
+
+## Attachment Checklist
+
+${attachmentLine("Risk Assessment", links.riskAssessmentLink)}
+${attachmentLine("Budget, if required or useful", links.budgetLink)}
+${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Deadline plan", links.deadlinePlanLink)}
+${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
+
+## Missing Information
+
+${listOrNone(input.missingCriticalFields)}
+`;
+}
+
+export function buildAccessibilityChecklistBody(input: EventPackInput) {
+  return `# Accessibility Checklist
+
+${FIELD_PACK_DISCLAIMER} Rules/templates last manually verified on ${input.rulesLastVerifiedDate ?? DEFAULT_RULES_LAST_VERIFIED}.
+
+- Event ID: ${input.eventId}
+- Event: ${input.eventName}
+- Location: ${text(input.preferredLocation)}
+- Accessibility contact or request route: ${text(input.accessibilityContactOrRequestRoute)}
+- Current accessibility plan: ${text(input.accessibilityPlan)}
+
+## Checklist
+
+- [ ] Confirm step-free route, lift access, accessible toilets, and seating layout for the venue.
+- [ ] Confirm how students can request accommodations without sharing sensitive access needs in Slack.
+- [ ] Include an accessibility contact or request route in internal planning and event promotion.
+- [ ] Check room layout for wheelchair spaces, sight lines, microphone/audio access, and quiet route if needed.
+- [ ] If food or refreshments are provided, confirm dietary and allergen information.
+- [ ] If ticketing or registration is used, confirm it can capture operational access requests through an approved route.
+- [ ] Keep individual access needs out of tracker rows unless a separately approved process exists.
+
+## Notes
+
+${input.publicOrNonLseAttendees ? "- Public/non-LSE attendance is in scope, access-control and arrival support need explicit review." : "- Public/non-LSE attendance not indicated."}
+${input.externalVenue ? "- External venue is in scope, request venue accessibility information before final readiness." : "- External venue not indicated."}
+`;
+}
+
+export function buildDeadlinePlanBody(input: EventPackInput) {
+  const items = input.deadlines ?? [];
+  const lines =
+    items.length > 0
+      ? items
+          .map((item, index) => {
+            const notes = item.notes?.length ? ` Notes: ${item.notes.join(" ")}` : "";
+            return `${index + 1}. ${item.task}
+   Due date: ${item.dueDate ?? "TBC"}
+   Type: ${item.deadlineType ?? "TBC"}
+   Source rule: ${item.sourceRule ?? "TBC"}
+   Blocks final readiness: ${item.blocksFinalSubmissionReadiness ? "yes" : "no"}${notes}`;
+          })
+          .join("\n\n")
+      : "No computed deadline items were supplied. Run compute_deadlines for this event route/date and regenerate or update this plan.";
+
+  return `# Deadline Plan
+
+${FIELD_PACK_DISCLAIMER} Rules/templates last manually verified on ${input.rulesLastVerifiedDate ?? DEFAULT_RULES_LAST_VERIFIED}.
+
+- Event ID: ${input.eventId}
+- Event: ${input.eventName}
+- Event date: ${displayDate(input.proposedDate)}
+- Classification: ${routeLabel(input.classificationRoute)}
+- Timezone: Europe/London
+- Working-day note: Indicative deadline, excludes weekends but not bank holidays unless a bank-holiday calendar is configured.
+
+## Deadline Items
+
+${lines}
+`;
+}
+
+export function buildInternalReviewSummaryBody(
+  input: EventPackInput,
+  links: EventPackFileLinks = {},
+  budget: BudgetRequirement = budgetRequirement(input),
+) {
+  return `# Internal Review Summary
+
+${FIELD_PACK_DISCLAIMER} Rules/templates last manually verified on ${input.rulesLastVerifiedDate ?? DEFAULT_RULES_LAST_VERIFIED}.
+
+## Event
+
+- Event ID: ${input.eventId}
+- Pack ID: ${buildPackId(input.eventId, input.packVersion ?? 1)}
+- Event: ${input.eventName}
+- Date: ${displayDate(input.proposedDate)}
+- Classification: ${routeLabel(input.classificationRoute)}
+- Classification reason: ${text(input.classificationReason)}
+- Generated by: ${text(input.generatedBy)}
+- Generated on: ${generatedDisplayDate(input)}
+- Rules source set: ${input.rulesSourceSetId ?? DEFAULT_RULES_SOURCE_SET}
+
+## Status
+
+- Submission readiness: ${submissionReadiness(input)}
+- Promotion gate: Blocked until event form/SU approval is clear.
+- Speaker promotion gate: ${hasSpeakers(input) ? "Blocked until SU speaker approval is clear." : "Not applicable."}
+- Sponsor-branded promotion gate: ${input.sponsorInvolved ? "Blocked until sponsorship/logo/contract approval is clear." : "Not applicable."}
+- Budget status: ${links.budgetLink ? (budget.required ? "Generated because required by threshold." : "Generated for internal planning.") : "Not generated."}
+
+## Triggers
+
+${listOrNone(input.triggers)}
+
+## Missing Critical Fields
+
+${listOrNone(input.missingCriticalFields)}
+
+## Final-Readiness Blockers
+
+${listOrNone(input.blocksFinalSubmissionReadiness)}
+
+## Pack Links
+
+${attachmentLine("Pack folder", links.packFolderLink)}
+${attachmentLine("Risk assessment", links.riskAssessmentLink)}
+${attachmentLine("Budget", links.budgetLink)}
+- Budget decision reasons: ${budget.reasons.length > 0 ? budget.reasons.join("; ") : "No budget threshold or request recorded."}
+${attachmentLine("Field pack", links.fieldPackLink)}
+${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Deadline plan", links.deadlinePlanLink)}
+
+## Human Actions
+
+- Committee must review every draft document before use.
+- Humans submit SU forms manually.
+- Humans handle room confirmation, payments, contracts, and public promotion.
+- Current SU guidance and live templates/forms remain authoritative.
+`;
+}
+
+export function buildEventTrackerRow(
+  input: EventPackInput,
+  links: EventPackFileLinks,
+) {
+  return {
+    "Event ID": input.eventId,
+    "Event Name": input.eventName,
+    Date: displayDate(input.proposedDate),
+    Time: eventDateTimeWithSetup(input),
+    Owner: text(input.organiserName, ""),
+    "Channel Thread Link": "",
+    Classification: routeLabel(input.classificationRoute),
+    "Classification Reason": text(input.classificationReason, ""),
+    "Expected Attendance": input.expectedAttendance ?? "",
+    "Budget Estimate": input.estimatedCost ?? "",
+    "External Speaker?": hasSpeakers(input) ? "yes" : "no",
+    "External Organisation?": input.externalOrganisationInvolved ? "yes" : "no",
+    "Sponsor?": input.sponsorInvolved ? "yes" : "no",
+    "Food?": input.foodOrRefreshments ? "yes" : "no",
+    "Alcohol?": input.alcohol ? "yes" : "no",
+    "Trip/External Venue?": input.tripBeyondM25 || input.overnightTrip || input.externalVenue ? "yes" : "no",
+    "Risk Assessment Status": links.riskAssessmentLink ? "draft generated" : "not generated",
+    "Budget Status": links.budgetLink ? "draft generated" : "not generated",
+    "Form Field Pack Status": links.fieldPackLink ? "draft generated" : "not generated",
+    "Missing Critical Fields": (input.missingCriticalFields ?? []).join("; "),
+    "Submission Readiness": submissionReadiness(input),
+    "SU Submission Status": "not submitted by Vichita",
+    "SU Approval Status": "not recorded",
+    "Room Confirmed?": "TBC",
+    "Promotion Gate": "BLOCKED until SU approval is clear",
+    "Ticketing Status": text(input.ticketingPlan, ""),
+    "Pack Folder Link": links.packFolderLink ?? "",
+    "Last Updated": new Date().toISOString(),
+  };
+}
+
+export function buildPackIndexRow(
+  input: EventPackInput,
+  links: EventPackFileLinks,
+) {
+  return {
+    "Pack ID": buildPackId(input.eventId, input.packVersion ?? 1),
+    "Event ID": input.eventId,
+    "Event Name": input.eventName,
+    "Pack Folder Link": links.packFolderLink ?? "",
+    "Risk Assessment Link": links.riskAssessmentLink ?? "",
+    "Budget Link": links.budgetLink ?? "",
+    "Field Pack Link": links.fieldPackLink ?? "",
+    "Accessibility Checklist Link": links.accessibilityChecklistLink ?? "",
+    "Internal Review Summary Link": links.internalReviewSummaryLink ?? "",
+    "Generated By": text(input.generatedBy, ""),
+    "Generated At": new Date().toISOString(),
+    "Rules Last Verified":
+      input.rulesLastVerifiedDate ?? DEFAULT_RULES_LAST_VERIFIED,
+    "Internal Approval Status": "draft generated",
+    "Approved By": "",
+    "Approved At": "",
+  };
+}
+
+export function documentBaseName(input: EventPackInput) {
+  return `${displayDate(input.proposedDate)} - ${input.eventName}`;
+}
+

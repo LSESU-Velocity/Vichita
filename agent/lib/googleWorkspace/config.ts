@@ -2,6 +2,7 @@ type Env = NodeJS.ProcessEnv;
 
 export const GOOGLE_WORKSPACE_SCOPES = [
   "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/documents",
   "https://www.googleapis.com/auth/spreadsheets",
 ];
 
@@ -19,6 +20,9 @@ const RECOMMENDED_ENV = [
   "DEFAULT_TIMEZONE",
   "RULES_SOURCE_SET_ID",
   "RULES_LAST_VERIFIED_DATE",
+  "GOOGLE_TEMPLATE_RISK_ASSESSMENT_FILE_ID",
+  "GOOGLE_TEMPLATE_BUDGET_FILE_ID",
+  "GOOGLE_TEMPLATE_SPONSORSHIP_CONTRACT_FILE_ID",
 ] as const;
 
 export type GoogleServiceAccountCredentials = {
@@ -33,6 +37,9 @@ export type GoogleWorkspaceConfig = {
   serviceAccountProjectId?: string;
   driveRootFolderId: string;
   trackersSpreadsheetId: string;
+  riskAssessmentTemplateFileId?: string;
+  budgetTemplateFileId?: string;
+  sponsorshipContractTemplateFileId?: string;
 };
 
 export type ConfigValidation = {
@@ -171,6 +178,10 @@ export function readGoogleWorkspaceConfig(
     serviceAccountProjectId: credentials.project_id,
     driveRootFolderId: driveRootFolderId.trim(),
     trackersSpreadsheetId: trackersSpreadsheetId.trim(),
+    riskAssessmentTemplateFileId: env.GOOGLE_TEMPLATE_RISK_ASSESSMENT_FILE_ID?.trim(),
+    budgetTemplateFileId: env.GOOGLE_TEMPLATE_BUDGET_FILE_ID?.trim(),
+    sponsorshipContractTemplateFileId:
+      env.GOOGLE_TEMPLATE_SPONSORSHIP_CONTRACT_FILE_ID?.trim(),
   };
 }
 
@@ -182,3 +193,4 @@ export function readServiceAccountCredentials(env: Env = process.env) {
 
   return parseServiceAccountCredentials(value);
 }
+
