@@ -62,11 +62,11 @@ Complete:
   - Canonical Event ID, pack ID, and idempotency helpers.
   - Approval-gated event pack folder creation by Event ID and stored Slack thread key when available.
   - Source Registry tab schema and approval-gated row upsert foundation.
+  - Live production smoke on 2026-06-21: Google setup check passed, tracker tabs/headers matched, and approval-gated Drive pack folder creation produced a clean `DD-MM-YYYY - Event Name` folder with Event ID/thread-key metadata.
 
 Partially complete:
 
 - Event classification and deadline behaviour works through Slack, but formal eval coverage and Slack modals are not complete.
-- Google Workspace live production access still depends on manual Drive/Sheets sharing and Vercel env setup.
 - Source/rule versioning is represented in env/config and tracker tooling, but current source rows still need manual verification and entry.
 
 Not complete yet:
@@ -1095,13 +1095,18 @@ Approval rules:
 
 Status: partially complete.
 
+Complete for current setup:
+
+- Google Drive folder structure exists.
+- `Vichita Trackers` exists as a native Google Sheet and has been live-verified through the service account.
+- Spreadsheet and document templates have been converted to native Google Workspace files for runtime use.
+
+Still required before real pack reliance:
+
 - Verify current LSESU public pages manually.
-- Store `rules_last_verified_date`.
-- Download official raw templates where public.
-- Create tagged copies with placeholders.
-- Record field maps.
-- Create Google Drive folder structure.
-- Create the `Vichita Trackers` spreadsheet; initial tabs/headers can be created or verified by the approval-gated `ensure_google_tracker_tabs` tool after service-account access works.
+- Store approved Source Registry rows after verification.
+- Confirm current-year large/flagship deadline values before setting deadline env vars.
+- Finish tagged template field maps/placeholders for generated packs.
 - Confirm data-handling questions with SU before broad use.
 
 ### Phase 1 - Eve Slack foundation
@@ -1116,7 +1121,7 @@ Status: complete for the test channel.
 
 ### Phase 2 - Google Workspace integration
 
-Status: implemented in code, live access smoke pending manual env/share setup.
+Status: complete for the Phase 2 foundation and live-smoke-tested in Slack.
 
 - Implemented Google Workspace connection using the Google service account approach.
 - Implemented JSON service-account auth through `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` for local/dev and early deployment.
@@ -1126,6 +1131,7 @@ Status: implemented in code, live access smoke pending manual env/share setup.
 - Implemented the one-spreadsheet tracker foundation, required tabs, required headers, approval-gated tab/header creation, and column expansion for manually created under-width tabs.
 - Implemented Source Registry row upsert foundation.
 - Implemented Event ID, pack ID, and idempotency helper utilities. Slack-originated events now derive a stable Event ID from channel/thread context and Drive folder creation dedupes by stored `vichitaThreadKey` when those Slack fields are supplied.
+- Live-smoke-tested on 2026-06-21 from Slack: read-only setup check passed, tracker tab/header verification found no differences, approval-gated folder creation worked, and folder naming now uses `DD-MM-YYYY - Event Name` while keeping IDs in metadata.
 - Template copy/fill remains in Phase 4.
 
 ### Phase 3 - Event intake and classification
@@ -1175,7 +1181,7 @@ Status: planned, not started.
 
 ### Phase 7 - Tests, evals, demo
 
-Status: helper tests started; formal evals and live Google smoke tests still pending.
+Status: helper tests and Phase 2 live Google smoke complete; formal evals still pending.
 
 - Typecheck.
 - Unit tests.
@@ -1519,12 +1525,12 @@ Done:
 6. No proactive watching or template monitor exists.
 7. Data-handling document is present for SU review.
 8. GitHub/Vercel/Slack/AI Gateway foundation is working.
-9. Google Workspace Phase 2 foundation is implemented in code, with live Google smoke pending env/share setup: service-account auth, Drive root check, tracker schema/tab helpers, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, and RAW Source Registry upsert foundation.
+9. Google Workspace Phase 2 foundation is live-smoke-tested: service-account auth, Drive root check, tracker schema/tab helpers, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, clean human-readable folder names, and RAW Source Registry upsert foundation.
 
 Still required for the first full event-pack acceptance gate:
 
 1. Event intake modal.
 2. Formal exactly-75 tests/evals.
-3. Manual Google Drive/Sheets sharing and Vercel env setup for live production access.
+3. Source Registry rows and current source verification for production pack reliance.
 4. Draft event pack generation from tagged templates.
 5. Marketing ops calendar row with launch gates.

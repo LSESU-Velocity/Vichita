@@ -17,11 +17,11 @@ Completed:
 - Slack trigger route fixed to match Vercel Connect's default path: `POST /triggers/slack`.
 - Vercel AI Gateway model routing configured through `EVE_MODEL`, currently defaulting to `zai/glm-5.2`, with same-provider fallback protection.
 - Initial Slack-tested event classification flow with draft-only disclaimer.
-- Phase 2 Google Workspace foundation in code, live Google smoke pending env: env/config validation, Google service-account auth via `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, one-spreadsheet tracker schema setup with under-width tab expansion, stable Slack-thread Event ID/idempotency helpers, approval-gated Drive folder/tracker writes, and RAW Source Registry upsert foundation.
+- Phase 2 Google Workspace foundation is live-smoke-tested: env/config validation, Google service-account auth via `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, one-spreadsheet tracker schema setup with under-width tab expansion, stable Slack-thread Event ID/idempotency helpers, approval-gated Drive folder creation, tracker verification, and RAW Source Registry upsert foundation.
 
 In progress / next:
 
-- Manual Google Drive/Sheets sharing and Vercel env completion for production.
+- Source Registry rows and current-year source verification before real pack reliance.
 - Event intake modal and formal classifier evals.
 - Event pack generation from tagged templates after approval.
 - Reminder tracker plus protected Vercel Cron route.

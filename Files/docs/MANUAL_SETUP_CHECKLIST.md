@@ -1,6 +1,6 @@
 # Vichita Manual Setup Checklist
 
-Last updated: 2026-06-20
+Last updated: 2026-06-21
 
 Use this checklist for the full Vichita build, including MVP and later v2 modules.
 
@@ -19,21 +19,20 @@ Completed:
 - AI Gateway/model configuration is wired through `EVE_MODEL`; current default is `zai/glm-5.2`.
 - Same-provider fallback guard is implemented through `EVE_MODEL_FALLBACKS`.
 - Initial event classification, missing-field, and deadline tools exist in `agent/tools/`.
-- Phase 2 Google Workspace foundation exists in code, with live Google smoke pending env/share setup: env/config validation, service-account auth from `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, tracker tab/header verification, approval-gated tracker tab creation, under-width tab expansion before header writes, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, and RAW Source Registry row upsert.
+- Phase 2 Google Workspace foundation is complete and live-smoke-tested: env/config validation, service-account auth from `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, tracker tab/header verification, under-width tab expansion before header writes, stable Slack-thread Event ID/idempotency helpers, approval-gated event pack folder creation, duplicate-safe Drive metadata, and RAW Source Registry row upsert.
 
 Partially complete:
 
-- Google Cloud project and service-account approach have been chosen. Runtime tools are wired, but live production access still depends on sharing the Drive folder/spreadsheet with the service account and setting Vercel env values.
 - Current-year large/flagship deadline env names exist, but values should stay blank until manually verified.
+- Source Registry rows still need approved source entries after manual verification.
 - Template copy/fill and generated event packs are not implemented yet.
 
 Next manual setup focus:
 
-- Finish Google Drive folder/template sharing with the service account.
-- Create/upload the single `Vichita Trackers` spreadsheet, then let the agent verify/create the required tabs after approval.
-- Add the Google folder/template/tracker IDs to Vercel once available.
-- Run the read-only Google Workspace setup check after env variables are set.
+- Add approved rows to the `Source Registry` after current LSESU source verification.
+- Verify current-year large/flagship deadline values before setting deadline env vars.
 - Keep SU/governance responses and data-handling constraints ready for the generated-pack phase.
+- Move implementation focus to Phase 4 template copy/fill and generated event packs.
 
 ## 1. Ownership decisions
 
@@ -107,7 +106,9 @@ Needed IDs:
 
 ## 4. Google Sheets trackers
 
-Create one Google spreadsheet named `Vichita Trackers`. Recommended path: create or upload the spreadsheet file, share it with the service account, set `GOOGLE_TRACKERS_SPREADSHEET_ID`, then let the approval-gated `ensure_google_tracker_tabs` tool create or verify the tabs and headers.
+Status for the Velocity deployment: complete. `Vichita Trackers` is a native Google Sheet, shared with the service account, configured through `GOOGLE_TRACKERS_SPREADSHEET_ID`, and verified by the live read-only setup check.
+
+For a new deployment, create one Google spreadsheet named `Vichita Trackers`. Recommended path: create or upload the spreadsheet file, share it with the service account, set `GOOGLE_TRACKERS_SPREADSHEET_ID`, then let the approval-gated `ensure_google_tracker_tabs` tool create or verify the tabs and headers.
 
 The required tabs are:
 
@@ -128,7 +129,9 @@ Recommended env/config names:
 
 - `GOOGLE_TRACKERS_SPREADSHEET_ID`
 
-After the spreadsheet ID and service account credential are configured, use the read-only `check_google_workspace_setup` tool to verify access. Use the approval-gated `ensure_google_tracker_tabs` tool to create missing tabs, expand under-width existing tabs, and write missing header rows. It will not repair existing differing headers unless `repairHeaderRows` is explicitly approved.
+Live check result on 2026-06-21: `check_google_workspace_setup` passed with no missing required env vars, writable Drive root access, and no tracker tab/header differences. `ensure_google_tracker_tabs` reported no setup write was needed.
+
+For a new deployment, after the spreadsheet ID and service account credential are configured, use the read-only `check_google_workspace_setup` tool to verify access. Use the approval-gated `ensure_google_tracker_tabs` tool to create missing tabs, expand under-width existing tabs, and write missing header rows. It will not repair existing differing headers unless `repairHeaderRows` is explicitly approved.
 
 Keep template file IDs separate. They point to individual Drive files, not tracker tabs.
 
@@ -167,6 +170,10 @@ Suggested early env names:
 - `AI_GATEWAY_API_KEY`
 - `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`
 - `GOOGLE_DRIVE_ROOT_FOLDER_ID`
+- `GOOGLE_TRACKERS_SPREADSHEET_ID`
+- `GOOGLE_TEMPLATE_RISK_ASSESSMENT_FILE_ID`
+- `GOOGLE_TEMPLATE_BUDGET_FILE_ID`
+- `GOOGLE_TEMPLATE_SPONSORSHIP_CONTRACT_FILE_ID`
 - `RULES_SOURCE_SET_ID`
 - `RULES_LAST_VERIFIED_DATE`
 - `CRON_SECRET`
