@@ -28,7 +28,7 @@ export async function checkDriveRootFolderAccess(client?: drive_v3.Drive) {
   const response = await drive.files.get({
     fileId: config.driveRootFolderId,
     fields:
-      "id,name,mimeType,trashed,webViewLink,capabilities(canAddChildren,canEdit)",
+      "id,name,mimeType,driveId,trashed,webViewLink,capabilities(canAddChildren,canEdit)",
     supportsAllDrives: true,
   });
   const file = response.data;
@@ -48,15 +48,23 @@ export async function checkDriveRootFolderAccess(client?: drive_v3.Drive) {
     );
   }
 
+  if (!file.driveId) {
+    warnings.push(
+      "GOOGLE_DRIVE_ROOT_FOLDER_ID must point to a folder in a Google Shared Drive. Service accounts have no My Drive storage quota, so template copies and generated Google Docs fail in ordinary My Drive folders.",
+    );
+  }
+
   return {
     ok:
       file.mimeType === FOLDER_MIME_TYPE &&
       file.trashed !== true &&
-      file.capabilities?.canAddChildren === true,
+      file.capabilities?.canAddChildren === true &&
+      Boolean(file.driveId),
     folder: {
       id: file.id,
       name: file.name,
       webViewLink: file.webViewLink ?? driveFolderUrl(config.driveRootFolderId),
+      sharedDriveId: file.driveId,
       canEdit: file.capabilities?.canEdit === true,
       canAddChildren: file.capabilities?.canAddChildren === true,
     },
@@ -315,3 +323,4 @@ export async function createOrFindEventPackFolder({
     folder: folderOutput(created),
   };
 }
+
