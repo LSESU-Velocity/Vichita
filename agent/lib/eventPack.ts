@@ -118,6 +118,7 @@ export type EventPackFileLinks = {
   budgetLink?: string;
   fieldPackLink?: string;
   accessibilityChecklistLink?: string;
+  accessibilityTasksStatus?: string;
   deadlinePlanLink?: string;
   internalReviewSummaryLink?: string;
 };
@@ -144,6 +145,16 @@ export type SheetValueUpdate = {
   range: string;
   values: Array<Array<string | number>>;
   valueInputOption: "RAW" | "USER_ENTERED";
+};
+
+export type GeneratedSheetCell = string | number | boolean;
+
+export type GeneratedSheet = {
+  sheetTitle: string;
+  values: GeneratedSheetCell[][];
+  frozenRowCount?: number;
+  checkboxColumns?: number[];
+  columnWidths?: number[];
 };
 
 const SOCIETY_NAME = "LSESU Velocity";
@@ -214,6 +225,82 @@ function listOrNone(values: string[] | undefined) {
   const filtered = (values ?? []).map((value) => value.trim()).filter(Boolean);
   if (filtered.length === 0) return "- None recorded";
   return filtered.map((value) => `- ${value}`).join("\n");
+}
+
+function tableCellText(value: string) {
+  return value
+    .replace(/\\\|/g, "|")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isMarkdownTableSeparator(cells: string[]) {
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function isMarkdownTableHeader(cells: string[]) {
+  const first = cells[0]?.toLowerCase();
+  const second = cells[1]?.toLowerCase();
+
+  return (
+    (first === "official form field" && second === "draft answer") ||
+    (first === "trips field" && second === "draft answer")
+  );
+}
+
+export function plainGoogleDocText(markdownish: string) {
+  const output: string[] = [];
+
+  for (const rawLine of markdownish.trim().split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      if (output.length > 0 && output[output.length - 1] !== "") {
+        output.push("");
+      }
+      continue;
+    }
+
+    const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
+    if (heading) {
+      if (output.length > 0 && output[output.length - 1] !== "") {
+        output.push("");
+      }
+      output.push(heading[1]);
+      continue;
+    }
+
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      const cells = trimmed
+        .slice(1, -1)
+        .split("|")
+        .map(tableCellText);
+
+      if (isMarkdownTableSeparator(cells) || isMarkdownTableHeader(cells)) {
+        continue;
+      }
+
+      output.push(cells.length === 2 ? `${cells[0]}: ${cells[1]}` : cells.join(" | "));
+      continue;
+    }
+
+    const checkbox = trimmed.match(/^- \[[ xX]\]\s+(.+)$/);
+    if (checkbox) {
+      output.push(`TODO: ${checkbox[1]}`);
+      continue;
+    }
+
+    const bullet = trimmed.match(/^- (.+)$/);
+    if (bullet) {
+      output.push(bullet[1]);
+      continue;
+    }
+
+    output.push(line);
+  }
+
+  return `${output.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
 }
 
 function speakerDetails(input: EventPackInput) {
@@ -636,6 +723,440 @@ function attachmentLine(label: string, value: string | undefined) {
   return `- ${label}: ${value ?? "TBC"}`;
 }
 
+function formRouteName(route: EventRoute | undefined) {
+  if (route === "regular_event_candidate") return "Regular Event Form";
+  if (route === "trip_process") return "Trips process";
+  return "Large Event or Speaker Event Form";
+}
+
+function answerNeedsReview(answer: string, forceReview = false) {
+  const normalized = answer.toLowerCase();
+  return (
+    forceReview ||
+    normalized.includes("tbc") ||
+    normalized.includes("needs") ||
+    normalized.includes("confirm") ||
+    normalized.includes("checking")
+  );
+}
+
+function taskIdPart(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "task"
+  );
+}
+
+function eventTaskId(input: EventPackInput, prefix: string, label: string) {
+  return `${input.eventId}-${prefix}-${taskIdPart(label)}`;
+}
+
+function taskIdHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).slice(0, 6);
+}
+
+function deadlineTaskId(input: EventPackInput, item: DeadlinePlanItem) {
+  const slug = taskIdPart(`${item.deadlineType ?? "deadline"}-${item.task}`);
+  const stableKey = [item.task, item.deadlineType ?? "", item.sourceRule ?? ""].join("|");
+  return `${input.eventId}-deadline-${slug}-${taskIdHash(stableKey)}`;
+}
+
+function complianceDueDate(input: EventPackInput) {
+  return (
+    input.deadlines?.find(
+      (item) => item.deadlineType === "internal_gate" && item.dueDate,
+    )?.dueDate ?? ""
+  );
+}
+
+export function buildFormFieldPackSheet(
+  input: EventPackInput,
+  links: EventPackFileLinks = {},
+): GeneratedSheet {
+  const route = input.classificationRoute;
+  const routeIsRegular = route === "regular_event_candidate";
+  const routeIsTrip = route === "trip_process";
+  const fieldSectionHeading = routeIsRegular
+    ? "Event Fields"
+    : routeIsTrip
+      ? "Trip Event Fields"
+      : "Core Event Fields";
+  const rows: GeneratedSheetCell[][] = [
+    ["Section", "Official form field", "Draft answer", "Entered?", "Needs review?", "Notes"],
+  ];
+  const add = (
+    section: string,
+    field: string,
+    answer: string,
+    notes = "",
+    forceReview = false,
+  ) => {
+    rows.push([
+      section,
+      field,
+      answer,
+      false,
+      answerNeedsReview(answer, forceReview) ? "yes" : "",
+      notes,
+    ]);
+  };
+
+  add("Submission Metadata", "Event ID", input.eventId);
+  add("Submission Metadata", "Form route", formRouteName(route));
+  add("Submission Metadata", "Event classification", routeLabel(route));
+  add("Submission Metadata", "Classification reason", text(input.classificationReason));
+  add("Submission Metadata", "Submission readiness", submissionReadiness(input));
+  add("Submission Metadata", "Generated on", generatedDisplayDate(input));
+  add(
+    "Submission Metadata",
+    "Rules source set",
+    input.rulesSourceSetId ?? DEFAULT_RULES_SOURCE_SET,
+  );
+  add(
+    "Submission Metadata",
+    "Official submission",
+    "Humans submit the current live SU/Podio form manually.",
+  );
+
+  add(fieldSectionHeading, "What is the name of your event?", input.eventName);
+  add(fieldSectionHeading, "What type of group are you submitting on behalf of?", "Society");
+  add(fieldSectionHeading, "What club/society are you submitting on behalf of?", SOCIETY_NAME);
+  if (!routeIsRegular && !routeIsTrip) {
+    add(fieldSectionHeading, "Is this sports training or a match?", "No");
+  }
+  add(fieldSectionHeading, "Name of Student Lead", text(input.organiserName));
+  add(fieldSectionHeading, "Committee Role", text(input.organiserRole));
+  add(fieldSectionHeading, "LSE Email Address", text(input.organiserLseEmail));
+  add(
+    fieldSectionHeading,
+    "Date and time of activity, including setup time",
+    eventDateTimeWithSetup(input),
+  );
+  add(
+    fieldSectionHeading,
+    "Is your activity repeated across multiple dates?",
+    yesNo(input.isRepeatedEvent),
+  );
+  add(fieldSectionHeading, "Repeated dates, if any", text(input.repeatedEventDates));
+  add(fieldSectionHeading, "Preferred event location", text(input.preferredLocation));
+  add(fieldSectionHeading, "External venue details, if relevant", text(input.externalVenueDetails));
+  if (routeIsRegular) {
+    add(
+      fieldSectionHeading,
+      "Confirmation: no external speakers",
+      hasSpeakers(input)
+        ? "No, external speakers are recorded, use Speaker/Large route."
+        : "Confirmed from current intake, no external speakers recorded.",
+      "Route check",
+      hasSpeakers(input),
+    );
+  }
+  add(fieldSectionHeading, "Overview of the event", text(input.eventDescription));
+  add(
+    fieldSectionHeading,
+    "Who will be attending?",
+    input.publicOrNonLseAttendees
+      ? "LSE students plus public/non-LSE attendees, confirm access controls."
+      : "Primarily LSE students/Velocity community, confirm final audience.",
+  );
+  if (routeIsRegular) {
+    add(
+      fieldSectionHeading,
+      "Public/open academic chair note, if relevant",
+      text(
+        input.publicEventAcademicChairNote,
+        input.publicOrNonLseAttendees
+          ? "Needs checking because public/non-LSE attendance is in scope."
+          : "Not indicated.",
+      ),
+    );
+  }
+  add(fieldSectionHeading, "Approximate number of attendees", String(input.expectedAttendance ?? "TBC"));
+  add(
+    fieldSectionHeading,
+    !routeIsRegular && !routeIsTrip
+      ? "Under-18s / schools / vulnerable adults / DBS details"
+      : "Under-18s / vulnerable adults involved?",
+    !routeIsRegular && !routeIsTrip
+      ? input.under18sOrVulnerableAdults
+        ? "Yes, details and DBS/safeguarding route need confirmation."
+        : "No / not indicated from current intake."
+      : yesNo(input.under18sOrVulnerableAdults),
+  );
+  add(fieldSectionHeading, "Film screening?", yesNo(input.filmScreening));
+  add(fieldSectionHeading, "Food or refreshments?", yesNo(input.foodOrRefreshments));
+  add(fieldSectionHeading, "Alcohol?", yesNo(input.alcohol));
+  add(fieldSectionHeading, "Ticketing", text(input.ticketingPlan));
+  add(fieldSectionHeading, "Attendee registration / entry plan", text(input.attendeeRegistrationEntryPlan));
+  if (!routeIsRegular && !routeIsTrip) {
+    add(fieldSectionHeading, "SUF status", text(input.sufStatus));
+    add(fieldSectionHeading, "Contracts attached?", text(input.contractsAttachedStatus));
+  }
+  add(
+    fieldSectionHeading,
+    "Total event cost",
+    typeof input.estimatedCost === "number" ? `GBP ${input.estimatedCost}` : "TBC",
+  );
+  add(fieldSectionHeading, "Risk Assessment attached?", links.riskAssessmentLink ? "Draft linked in pack" : "TBC");
+  add(fieldSectionHeading, "Budget attached?", links.budgetLink ? "Draft linked in pack" : "Not generated or TBC");
+
+  if (routeIsTrip) {
+    add("Trips Process Fields", "Trip type", text(input.tripType));
+    add("Trips Process Fields", "Beyond the M25?", yesNo(input.tripBeyondM25));
+    add("Trips Process Fields", "Overnight stay?", yesNo(input.overnightTrip));
+    add("Trips Process Fields", "Transport plan", text(input.transportPlan));
+    add("Trips Process Fields", "Accommodation plan, if relevant", text(input.accommodationPlan));
+    add(
+      "Trips Process Fields",
+      "Trips process note",
+      "Use the SU trips process rather than the ordinary event form. Verify current trip guidance before final readiness.",
+      "Process check",
+      true,
+    );
+  } else if (!routeIsRegular) {
+    add("External Speaker Fields", "External speakers?", hasSpeakers(input) ? "Yes" : "No / TBC");
+    add(
+      "External Speaker Fields",
+      "Full names, job titles, organisations, and descriptions of speakers",
+      speakerDetails(input),
+    );
+    add("External Speaker Fields", "What topics will speakers be discussing?", speakerTopics(input));
+    add(
+      "External Speaker Fields",
+      "Academic Chair status",
+      text(input.academicChairStatus, hasSpeakers(input) ? "Needs checking" : "Not applicable"),
+    );
+    add(
+      "External Speaker Fields",
+      "Academic Chair full name and email, if confirmed",
+      text(input.academicChairNameEmail),
+    );
+    add("External Speaker Fields", "Speaker approval status", "Not approved until SU confirms.", "Approval gate", true);
+    add(
+      "External Speaker Fields",
+      "Promotion gate",
+      "Speaker promotion blocked until SU speaker approval is clear.",
+      "Approval gate",
+      true,
+    );
+    add("External Organisation / Sponsor Fields", "External organisation involved?", yesNo(input.externalOrganisationInvolved));
+    add("External Organisation / Sponsor Fields", "Organisation name", text(input.externalOrganisationName));
+    add(
+      "External Organisation / Sponsor Fields",
+      "How is the event society-led and fully organised by Velocity?",
+      text(input.societyLedExplanation),
+    );
+    add(
+      "External Organisation / Sponsor Fields",
+      "Sponsor / employer involvement details",
+      input.sponsorInvolved ? text(input.sponsorName, "Sponsor involved, details TBC") : "No sponsor recorded.",
+    );
+    add(
+      "External Organisation / Sponsor Fields",
+      "LSE Careers contact required?",
+      input.externalOrganisationInvolved || input.sponsorInvolved
+        ? "Needs checking for employer/careers-style event."
+        : "Not indicated.",
+    );
+    add(
+      "External Organisation / Sponsor Fields",
+      "Sponsorship contract status",
+      input.sponsorInvolved
+        ? "Needs sponsorship process check before final readiness."
+        : "Not indicated.",
+    );
+  }
+
+  add("Attachment Checklist", "Risk Assessment", links.riskAssessmentLink ?? "TBC");
+  add("Attachment Checklist", "Budget, if required or useful", links.budgetLink ?? "TBC");
+  add("Attachment Checklist", "Deadline plan", links.deadlinePlanLink ?? "TBC");
+  add("Attachment Checklist", "Internal review summary", links.internalReviewSummaryLink ?? "TBC");
+  add(
+    "Attachment Checklist",
+    "Accessibility tasks",
+    links.accessibilityTasksStatus ?? "Tracked in Compliance Tasks when tracker updates are enabled.",
+  );
+
+  for (const missing of input.missingCriticalFields ?? []) {
+    add("Missing Information", missing, "TBC", "Required before final submission readiness", true);
+  }
+
+  return {
+    sheetTitle: "Form Fields",
+    values: rows,
+    frozenRowCount: 1,
+    checkboxColumns: [4],
+    columnWidths: [220, 360, 520, 95, 120, 320],
+  };
+}
+
+export function buildDeadlinePlanSheet(input: EventPackInput): GeneratedSheet {
+  const values: GeneratedSheetCell[][] = [
+    [
+      "Task ID",
+      "Event ID",
+      "Event Name",
+      "Task",
+      "Owner",
+      "Role",
+      "Due Date",
+      "Deadline Type",
+      "Source Rule",
+      "Status",
+      "Blocker?",
+      "Notes",
+    ],
+  ];
+  const items = input.deadlines ?? [];
+
+  if (items.length === 0) {
+    values.push([
+      eventTaskId(input, "deadline", "compute-deadlines"),
+      input.eventId,
+      input.eventName,
+      "Run compute_deadlines for this event route/date and update this plan.",
+      riskOwner(input),
+      "Event lead",
+      "",
+      "verification_needed",
+      "No computed deadlines were supplied to generate_event_pack.",
+      "not started",
+      "yes",
+      "Draft aid only. Check current SU guidance and live forms before submission.",
+    ]);
+  } else {
+    for (const [index, item] of items.entries()) {
+      values.push([
+        deadlineTaskId(input, item),
+        input.eventId,
+        input.eventName,
+        item.task,
+        riskOwner(input),
+        item.blocksFinalSubmissionReadiness ? "Event lead" : "Committee",
+        item.dueDate ?? "",
+        item.deadlineType ?? "TBC",
+        item.sourceRule ?? "TBC",
+        "not started",
+        item.blocksFinalSubmissionReadiness ? "yes" : "no",
+        item.notes?.join(" ") ?? "",
+      ]);
+    }
+  }
+
+  return {
+    sheetTitle: "Deadline Plan",
+    values,
+    frozenRowCount: 1,
+    columnWidths: [320, 300, 260, 520, 220, 150, 120, 170, 420, 130, 110, 420],
+  };
+}
+
+export function buildDeadlineComplianceTaskRows(input: EventPackInput) {
+  const items = input.deadlines ?? [];
+
+  if (items.length === 0) {
+    return [
+      {
+        "Task ID": eventTaskId(input, "deadline", "compute-deadlines"),
+        "Event ID": input.eventId,
+        Task: "Run compute_deadlines for this event route/date and update this plan.",
+        Owner: riskOwner(input),
+        Role: "Event lead",
+        "Due Date": "",
+        "Deadline Type": "verification_needed",
+        "Source Rule": "No computed deadlines were supplied to generate_event_pack.",
+        Status: "not started",
+        "Blocker?": "yes",
+        Notes: "Draft aid only. Check current SU guidance and live forms before submission.",
+      },
+    ];
+  }
+
+  return items.map((item, index) => ({
+    "Task ID": deadlineTaskId(input, item),
+    "Event ID": input.eventId,
+    Task: item.task,
+    Owner: riskOwner(input),
+    Role: item.blocksFinalSubmissionReadiness ? "Event lead" : "Committee",
+    "Due Date": item.dueDate ?? "",
+    "Deadline Type": item.deadlineType ?? "TBC",
+    "Source Rule": item.sourceRule ?? "TBC",
+    Status: "not started",
+    "Blocker?": item.blocksFinalSubmissionReadiness ? "yes" : "no",
+    Notes: item.notes?.join(" ") ?? "",
+  }));
+}
+
+export function buildAccessibilityComplianceTaskRows(input: EventPackInput) {
+  const dueDate = complianceDueDate(input);
+  const tasks = [
+    {
+      id: "venue-access",
+      task: "Confirm step-free route, lift access, accessible toilets, and seating layout for the venue.",
+      blocker: true,
+      notes: `Venue: ${text(input.preferredLocation)}.`,
+    },
+    {
+      id: "request-route",
+      task: "Confirm how students can request accessibility accommodations without sharing sensitive access needs in Slack.",
+      blocker: !input.accessibilityContactOrRequestRoute,
+      notes: `Current route: ${text(input.accessibilityContactOrRequestRoute)}.`,
+    },
+    {
+      id: "promotion-contact",
+      task: "Include an accessibility contact or accommodation-request route in internal planning and event promotion.",
+      blocker: !input.accessibilityContactOrRequestRoute,
+      notes: "Do not store individual access needs in tracker rows.",
+    },
+    {
+      id: "room-layout",
+      task: "Check room layout for wheelchair spaces, sight lines, microphone/audio access, and a quiet route if needed.",
+      blocker: false,
+      notes: "Use venue-approved layouts and room guidance.",
+    },
+    {
+      id: "food-allergens",
+      task: "If food or refreshments are provided, confirm dietary and allergen information.",
+      blocker: Boolean(input.foodOrRefreshments),
+      notes: input.foodOrRefreshments ? "Food is in scope." : "Food is not currently in scope.",
+    },
+    {
+      id: "registration-access",
+      task: "If ticketing or registration is used, confirm it can capture operational access requests through an approved route.",
+      blocker: false,
+      notes: `Ticketing plan: ${text(input.ticketingPlan)}.`,
+    },
+    {
+      id: "sensitive-data-minimisation",
+      task: "Keep individual access needs out of tracker rows unless a separately approved process exists.",
+      blocker: false,
+      notes: "Record process status only, not personal access details.",
+    },
+  ];
+
+  return tasks.map((task) => ({
+    "Task ID": eventTaskId(input, "accessibility", task.id),
+    "Event ID": input.eventId,
+    Task: task.task,
+    Owner: riskOwner(input),
+    Role: "Event lead",
+    "Due Date": dueDate,
+    "Deadline Type": "accessibility_check",
+    "Source Rule": "LSESU accessibility planning checklist; verify current guidance before submission.",
+    Status: "not started",
+    "Blocker?": task.blocker ? "yes" : "no",
+    Notes: task.notes,
+  }));
+}
+
 export function buildFormFieldPackBody(
   input: EventPackInput,
   links: EventPackFileLinks = {},
@@ -736,7 +1257,7 @@ ${largeOnlyClosingRows}| Total event cost | ${typeof input.estimatedCost === "nu
 
 ${attachmentLine("Risk Assessment", links.riskAssessmentLink)}
 ${attachmentLine("Budget, if required or useful", links.budgetLink)}
-${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Accessibility tasks", links.accessibilityTasksStatus ?? links.accessibilityChecklistLink)}
 ${attachmentLine("Deadline plan", links.deadlinePlanLink)}
 ${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
 
@@ -763,7 +1284,7 @@ ${listOrNone(input.missingCriticalFields)}
 
 ${attachmentLine("Risk Assessment", links.riskAssessmentLink)}
 ${attachmentLine("Budget, if required or useful", links.budgetLink)}
-${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Accessibility tasks", links.accessibilityTasksStatus ?? links.accessibilityChecklistLink)}
 ${attachmentLine("Deadline plan", links.deadlinePlanLink)}
 ${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
 
@@ -801,7 +1322,7 @@ ${listOrNone(input.missingCriticalFields)}
 
 ${attachmentLine("Risk Assessment", links.riskAssessmentLink)}
 ${attachmentLine("Budget, if required or useful", links.budgetLink)}
-${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Accessibility tasks", links.accessibilityTasksStatus ?? links.accessibilityChecklistLink)}
 ${attachmentLine("Deadline plan", links.deadlinePlanLink)}
 ${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
 
@@ -920,7 +1441,7 @@ ${attachmentLine("Risk assessment", links.riskAssessmentLink)}
 ${attachmentLine("Budget", links.budgetLink)}
 - Budget decision reasons: ${budget.reasons.length > 0 ? budget.reasons.join("; ") : "No budget threshold or request recorded."}
 ${attachmentLine("Field pack", links.fieldPackLink)}
-${attachmentLine("Accessibility checklist", links.accessibilityChecklistLink)}
+${attachmentLine("Accessibility tasks", links.accessibilityTasksStatus ?? links.accessibilityChecklistLink)}
 ${attachmentLine("Deadline plan", links.deadlinePlanLink)}
 
 ## Human Actions

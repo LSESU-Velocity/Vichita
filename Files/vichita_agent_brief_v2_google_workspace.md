@@ -553,11 +553,10 @@ Vichita/
     DD-MM-YYYY - Event Name/
       Risk Assessment.docx or Google Doc
       Budget.xlsx or Google Sheet
-      LSESU Form Field Pack Google Doc
-      Missing Info Checklist Google Doc
-      Accessibility Checklist Google Doc
-      Deadline Plan Google Sheet/Doc
+      LSESU Form Field Pack Google Sheet
+      Deadline Plan Google Sheet
       Internal Review Summary Google Doc
+      Accessibility and deadline actions tracked in Compliance Tasks when tracker writes are enabled
   Sponsorship Packs/
   Finance Checks/
   Marketing Ops/

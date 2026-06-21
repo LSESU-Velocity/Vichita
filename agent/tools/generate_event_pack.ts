@@ -1,25 +1,30 @@
 import { defineTool } from "eve/tools";
+import type { sheets_v4 } from "googleapis";
 import { always } from "eve/tools/approval";
 import { z } from "zod";
 
 import { buildPackId, parseEventId } from "../lib/eventIdentity.js";
 import {
-  buildAccessibilityChecklistBody,
+  buildAccessibilityComplianceTaskRows,
   buildBudgetSheetUpdates,
-  buildDeadlinePlanBody,
+  buildDeadlineComplianceTaskRows,
+  buildDeadlinePlanSheet,
   buildEventTrackerRow,
-  buildFormFieldPackBody,
+  buildFormFieldPackSheet,
   buildInternalReviewSummaryBody,
   buildPackIndexRow,
   buildRiskAssessmentScalarReplacements,
+  plainGoogleDocText,
   budgetRequirement,
   documentBaseName,
   type EventPackFileLinks,
+  type GeneratedSheet,
 } from "../lib/eventPack.js";
 import { createDriveClient, createSheetsClient } from "../lib/googleWorkspace/client.js";
 import {
   copyDriveFileToFolder,
   createGoogleDocWithText,
+  createGoogleSheetFile,
   replaceGoogleDocText,
   updateGoogleDocText,
 } from "../lib/googleWorkspace/docs.js";
@@ -33,6 +38,7 @@ import { readGoogleWorkspaceConfig } from "../lib/googleWorkspace/config.js";
 import {
   checkTrackerSpreadsheet,
   upsertTrackerRow,
+  upsertTrackerRows,
 } from "../lib/googleWorkspace/sheets.js";
 
 const GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document";
@@ -350,6 +356,7 @@ async function createGoogleDocWithTextOrReuse({
   reusedFiles: string[];
   updateExistingDrafts: boolean;
 }) {
+  const docText = plainGoogleDocText(text);
   const existing = await findExistingDraftFile({
     folderId: parentFolderId,
     eventId: appProperties.vichitaEventId,
@@ -370,7 +377,7 @@ async function createGoogleDocWithTextOrReuse({
       );
     }
 
-    await updateGoogleDocText({ documentId: existing.id, text });
+    await updateGoogleDocText({ documentId: existing.id, text: docText });
     reusedFiles.push(documentType);
     return existing;
   }
@@ -378,10 +385,229 @@ async function createGoogleDocWithTextOrReuse({
   return createGoogleDocWithText({
     parentFolderId,
     name,
-    text,
+    text: docText,
     appProperties,
   });
 }
+async function createGoogleSheetOrReuse({
+  parentFolderId,
+  name,
+  appProperties,
+  documentType,
+  reusedFiles,
+  updateExistingDrafts,
+}: {
+  parentFolderId: string;
+  name: string;
+  appProperties: Record<string, string>;
+  documentType: string;
+  reusedFiles: string[];
+  updateExistingDrafts: boolean;
+}) {
+  const existing = await findExistingDraftFile({
+    folderId: parentFolderId,
+    eventId: appProperties.vichitaEventId,
+    packVersion: Number(appProperties.vichitaPackVersion),
+    documentType,
+  });
+
+  if (existing) {
+    if (!updateExistingDrafts) {
+      throw new Error(
+        `A ${documentType} draft already exists for ${appProperties.vichitaEventId} v${appProperties.vichitaPackVersion}: ${existing.webViewLink}. Set updateExistingDrafts=true to update the existing pack in place, or bump packVersion to create a separate snapshot.`,
+      );
+    }
+
+    if (existing.mimeType !== GOOGLE_SHEET_MIME_TYPE) {
+      throw new Error(
+        `Existing ${documentType} draft is not a native Google Sheet and cannot be updated in place: ${existing.webViewLink}.`,
+      );
+    }
+
+    reusedFiles.push(documentType);
+    return existing;
+  }
+
+  return createGoogleSheetFile({
+    parentFolderId,
+    name,
+    appProperties,
+  });
+}
+
+function quoteSheetTitle(title: string) {
+  return `'${title.replace(/'/g, "''")}'`;
+}
+
+async function ensureSheetTab({
+  spreadsheetId,
+  title,
+  sheets,
+}: {
+  spreadsheetId: string;
+  title: string;
+  sheets: sheets_v4.Sheets;
+}) {
+  const metadata = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets(properties(sheetId,title,index))",
+  });
+  const sheetProperties = metadata.data.sheets
+    ?.map((sheet) => sheet.properties)
+    .filter((properties): properties is sheets_v4.Schema$SheetProperties =>
+      Boolean(properties?.sheetId !== undefined && properties?.title),
+    ) ?? [];
+  const existing = sheetProperties.find((properties) => properties.title === title);
+  if (typeof existing?.sheetId === "number") return existing.sheetId;
+
+  const first = sheetProperties[0];
+  if (sheetProperties.length <= 1 && typeof first?.sheetId === "number") {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: { sheetId: first.sheetId, title },
+              fields: "title",
+            },
+          },
+        ],
+      },
+    });
+    return first.sheetId;
+  }
+
+  const response = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          addSheet: {
+            properties: { title },
+          },
+        },
+      ],
+    },
+  });
+  const sheetId = response.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  if (typeof sheetId !== "number") {
+    throw new Error(`Google Sheets did not return a sheetId for ${title}.`);
+  }
+
+  return sheetId;
+}
+
+async function fillGeneratedSheet(spreadsheetId: string, sheet: GeneratedSheet) {
+  const sheets = createSheetsClient();
+  const sheetId = await ensureSheetTab({
+    spreadsheetId,
+    title: sheet.sheetTitle,
+    sheets,
+  });
+  const values = sheet.values;
+  const columnCount = Math.max(...values.map((row) => row.length), 1);
+  const rowCount = Math.max(values.length, 1);
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${quoteSheetTitle(sheet.sheetTitle)}!A:Z`,
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${quoteSheetTitle(sheet.sheetTitle)}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values },
+  });
+
+  const requests: sheets_v4.Schema$Request[] = [
+    {
+      updateSheetProperties: {
+        properties: {
+          sheetId,
+          gridProperties: {
+            frozenRowCount: sheet.frozenRowCount ?? 1,
+            rowCount: Math.max(rowCount + 25, 100),
+            columnCount: Math.max(columnCount, 12),
+          },
+        },
+        fields: "gridProperties.frozenRowCount,gridProperties.rowCount,gridProperties.columnCount",
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: 0,
+          endRowIndex: 1,
+          startColumnIndex: 0,
+          endColumnIndex: columnCount,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0.9, green: 0.93, blue: 0.97 },
+            textFormat: { bold: true },
+            wrapStrategy: "WRAP",
+          },
+        },
+        fields: "userEnteredFormat(backgroundColor,textFormat,wrapStrategy)",
+      },
+    },
+    {
+      setBasicFilter: {
+        filter: {
+          range: {
+            sheetId,
+            startRowIndex: 0,
+            endRowIndex: rowCount,
+            startColumnIndex: 0,
+            endColumnIndex: columnCount,
+          },
+        },
+      },
+    },
+  ];
+
+  for (const [index, width] of (sheet.columnWidths ?? []).entries()) {
+    requests.push({
+      updateDimensionProperties: {
+        range: {
+          sheetId,
+          dimension: "COLUMNS",
+          startIndex: index,
+          endIndex: index + 1,
+        },
+        properties: { pixelSize: width },
+        fields: "pixelSize",
+      },
+    });
+  }
+
+  for (const column of sheet.checkboxColumns ?? []) {
+    requests.push({
+      setDataValidation: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+          endRowIndex: rowCount,
+          startColumnIndex: column - 1,
+          endColumnIndex: column,
+        },
+        rule: {
+          condition: { type: "BOOLEAN" },
+          strict: true,
+          showCustomUi: true,
+        },
+      },
+    });
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+}
+
 async function fillBudgetSheet(spreadsheetId: string, input: z.infer<typeof Input>) {
   const sheets = createSheetsClient();
   const updates = buildBudgetSheetUpdates(input);
@@ -406,7 +632,7 @@ async function fillBudgetSheet(spreadsheetId: string, input: z.infer<typeof Inpu
 
 export default defineTool({
   description:
-    "Approval-gated Google Workspace write. Generate a draft event pack for an Event ID: fill the tagged risk-assessment Google Doc template, copy/fill the budget Google Sheet when required or requested, create form-field/accessibility/deadline/review Google Docs, and upsert tracker links. Humans still review and submit all SU forms manually.",
+    "Approval-gated Google Workspace write. Generate a draft event pack for an Event ID: fill the tagged risk-assessment Google Doc template, copy/fill the budget Google Sheet when required or requested, create form-field and deadline Google Sheets, create the internal review Google Doc, and upsert tracker/task links. Humans still review and submit all SU forms manually.",
   inputSchema: Input,
   needsApproval: always(),
   async execute(input) {
@@ -530,53 +756,44 @@ export default defineTool({
       budgetLink: budget?.webViewLink,
     };
 
-    const accessibilityChecklist = await createGoogleDocWithTextOrReuse({
-      parentFolderId: folderId,
-      name: `${baseName} - Accessibility Checklist v${input.packVersion}`,
-      text: buildAccessibilityChecklistBody(input),
-      documentType: "accessibility-checklist",
-      reusedFiles,
-      updateExistingDrafts: input.updateExistingDrafts,
-      appProperties: documentAppProperties({
-        eventId: input.eventId,
-        packId,
-        packVersion: input.packVersion,
-        documentType: "accessibility-checklist",
-      }),
-    });
-
-    const deadlinePlan = await createGoogleDocWithTextOrReuse({
+    const deadlinePlan = await createGoogleSheetOrReuse({
       parentFolderId: folderId,
       name: `${baseName} - Deadline Plan v${input.packVersion}`,
-      text: buildDeadlinePlanBody(input),
-      documentType: "deadline-plan",
+      documentType: "deadline-plan-sheet",
       reusedFiles,
       updateExistingDrafts: input.updateExistingDrafts,
       appProperties: documentAppProperties({
         eventId: input.eventId,
         packId,
         packVersion: input.packVersion,
-        documentType: "deadline-plan",
+        documentType: "deadline-plan-sheet",
       }),
     });
+    await fillGeneratedSheet(deadlinePlan.id, buildDeadlinePlanSheet(input));
+
+    const deadlineTaskRows = buildDeadlineComplianceTaskRows(input);
+    const accessibilityTaskRows = buildAccessibilityComplianceTaskRows(input);
+    const complianceTaskRows = [...deadlineTaskRows, ...accessibilityTaskRows];
+    const accessibilityTasksStatus = input.updateTrackers
+      ? `Tracked in Compliance Tasks (${accessibilityTaskRows.length} rows).`
+      : "Not written because tracker updates were disabled.";
 
     const fieldPackLinks: EventPackFileLinks = {
       ...firstLinks,
-      accessibilityChecklistLink: accessibilityChecklist.webViewLink,
       deadlinePlanLink: deadlinePlan.webViewLink,
+      accessibilityTasksStatus,
     };
-    const fieldPack = await createGoogleDocWithTextOrReuse({
+    const fieldPack = await createGoogleSheetOrReuse({
       parentFolderId: folderId,
       name: `${baseName} - LSESU Form Field Pack v${input.packVersion}`,
-      text: buildFormFieldPackBody(input, fieldPackLinks),
-      documentType: "field-pack",
+      documentType: "field-pack-sheet",
       reusedFiles,
       updateExistingDrafts: input.updateExistingDrafts,
       appProperties: documentAppProperties({
         eventId: input.eventId,
         packId,
         packVersion: input.packVersion,
-        documentType: "field-pack",
+        documentType: "field-pack-sheet",
       }),
     });
 
@@ -603,6 +820,8 @@ export default defineTool({
       ...summaryLinks,
       internalReviewSummaryLink: internalReviewSummary.webViewLink,
     };
+    await fillGeneratedSheet(fieldPack.id, buildFormFieldPackSheet(input, links));
+
     const trackerUpdates: unknown[] = [];
 
     if (input.updateTrackers) {
@@ -624,8 +843,16 @@ export default defineTool({
           valueInputOption: "RAW",
         }),
       );
-    }
 
+      trackerUpdates.push(
+        await upsertTrackerRows({
+          tabName: "Compliance Tasks",
+          keyColumn: "Task ID",
+          rows: complianceTaskRows,
+          valueInputOption: "RAW",
+        }),
+      );
+    }
     return {
       eventId: input.eventId,
       packId,
@@ -635,7 +862,6 @@ export default defineTool({
         riskAssessment,
         budget,
         fieldPack,
-        accessibilityChecklist,
         deadlinePlan,
         internalReviewSummary,
       },
@@ -643,6 +869,11 @@ export default defineTool({
       riskAssessmentTableFill,
       riskAssessmentHeaderUpdate,
       riskAssessmentTextQa,
+      deadlineTasks: { rows: deadlineTaskRows.length },
+      accessibilityTasks: {
+        status: accessibilityTasksStatus,
+        rows: accessibilityTaskRows.length,
+      },
       reusedFiles,
       trackerUpdates,
       disclaimer:
@@ -661,7 +892,6 @@ export default defineTool({
           riskAssessment: output.files.riskAssessment.webViewLink,
           budget: output.files.budget?.webViewLink,
           fieldPack: output.files.fieldPack.webViewLink,
-          accessibilityChecklist: output.files.accessibilityChecklist.webViewLink,
           deadlinePlan: output.files.deadlinePlan.webViewLink,
           internalReviewSummary:
             output.files.internalReviewSummary.webViewLink,
@@ -670,6 +900,8 @@ export default defineTool({
         riskAssessmentTableFill: output.riskAssessmentTableFill,
         riskAssessmentHeaderUpdate: output.riskAssessmentHeaderUpdate,
         riskAssessmentTextQa: output.riskAssessmentTextQa,
+        deadlineTasks: output.deadlineTasks,
+        accessibilityTasks: output.accessibilityTasks,
         reusedFiles: output.reusedFiles,
         trackerUpdates: output.trackerUpdates,
         disclaimer: output.disclaimer,

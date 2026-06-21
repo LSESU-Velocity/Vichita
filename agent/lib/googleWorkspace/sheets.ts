@@ -483,3 +483,143 @@ export async function upsertTrackerRow({
     tabName,
   };
 }
+
+export async function upsertTrackerRows({
+  tabName,
+  keyColumn,
+  rows,
+  valueInputOption = "RAW",
+  client,
+}: {
+  tabName: string;
+  keyColumn: string;
+  rows: Array<Record<string, string | number | boolean | null | undefined>>;
+  valueInputOption?: "RAW" | "USER_ENTERED";
+  client?: sheets_v4.Sheets;
+}) {
+  const config = readGoogleWorkspaceConfig();
+  const sheets = getSheetsClient(client);
+  const definition = TRACKER_TAB_DEFINITIONS.find(
+    (candidate) => candidate.title === tabName,
+  );
+  if (!definition) {
+    throw new Error(`Unknown tracker tab "${tabName}".`);
+  }
+
+  if (rows.length === 0) {
+    return {
+      action: "noop" as const,
+      tabName,
+      keyColumn,
+      updatedRows: 0,
+      appendedRows: 0,
+    };
+  }
+
+  const headerResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.trackersSpreadsheetId,
+    range: `${quoteSheetName(tabName)}!1:1`,
+  });
+  const headers =
+    headerResponse.data.values?.[0]?.map((value) => String(value)) ?? [];
+  const comparison = compareHeaders(headers, definition.headers);
+  if (!comparison.exactMatch) {
+    throw new Error(
+      `${tabName} headers are not ready. Run ensure_google_tracker_tabs first.`,
+    );
+  }
+
+  const keyIndex = headers.indexOf(keyColumn);
+  if (keyIndex === -1) {
+    throw new Error(`${tabName} does not have key column "${keyColumn}".`);
+  }
+
+  const seenInputKeys = new Set<string>();
+  const normalizedRows = rows.map((row) => {
+    const keyValue = String(row[keyColumn] ?? "").trim();
+    if (!keyValue) {
+      throw new Error(`${tabName} row is missing key column "${keyColumn}".`);
+    }
+    if (seenInputKeys.has(keyValue)) {
+      throw new Error(`${tabName} batch contains duplicate ${keyColumn}=${keyValue}.`);
+    }
+    seenInputKeys.add(keyValue);
+
+    return {
+      keyValue,
+      values: headers.map((header) => row[header] ?? ""),
+    };
+  });
+
+  const lastColumn = columnLetter(headers.length);
+  const dataResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.trackersSpreadsheetId,
+    range: `${quoteSheetName(tabName)}!A2:${lastColumn}`,
+  });
+  const existingRows = dataResponse.data.values ?? [];
+  const existingByKey = new Map<string, number[]>();
+
+  for (const [index, values] of existingRows.entries()) {
+    const keyValue = String(values[keyIndex] ?? "");
+    if (!seenInputKeys.has(keyValue)) continue;
+    const rowNumbers = existingByKey.get(keyValue) ?? [];
+    rowNumbers.push(index + 2);
+    existingByKey.set(keyValue, rowNumbers);
+  }
+
+  for (const [keyValue, rowNumbers] of existingByKey.entries()) {
+    if (rowNumbers.length > 1) {
+      throw new Error(
+        `${tabName} has duplicate rows for ${keyColumn}=${keyValue}. Resolve duplicates manually before writing.`,
+      );
+    }
+  }
+
+  const updates: Array<{ range: string; values: Array<Array<string | number | boolean | null | undefined>> }> = [];
+  const appends: Array<Array<string | number | boolean | null | undefined>> = [];
+
+  for (const row of normalizedRows) {
+    const rowNumber = existingByKey.get(row.keyValue)?.[0];
+    if (rowNumber) {
+      updates.push({
+        range: `${quoteSheetName(tabName)}!A${rowNumber}:${lastColumn}${rowNumber}`,
+        values: [row.values],
+      });
+    } else {
+      appends.push(row.values);
+    }
+  }
+
+  if (updates.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: config.trackersSpreadsheetId,
+      requestBody: {
+        valueInputOption,
+        data: updates,
+      },
+    });
+  }
+
+  let appendRange: string | undefined;
+  if (appends.length > 0) {
+    const appendResponse = await sheets.spreadsheets.values.append({
+      spreadsheetId: config.trackersSpreadsheetId,
+      range: `${quoteSheetName(tabName)}!A:${lastColumn}`,
+      valueInputOption,
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: appends,
+      },
+    });
+    appendRange = appendResponse.data.updates?.updatedRange ?? undefined;
+  }
+
+  return {
+    action: "batch_upsert" as const,
+    tabName,
+    keyColumn,
+    updatedRows: updates.length,
+    appendedRows: appends.length,
+    appendRange,
+  };
+}

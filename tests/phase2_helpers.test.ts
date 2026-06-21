@@ -23,14 +23,21 @@ import {
   compareHeaders,
   trackerGridProperties,
   trackerRequiredColumnCount,
+  upsertTrackerRows,
 } from "../agent/lib/googleWorkspace/sheets.ts";
 import { buildSourceRegistryEntry } from "../agent/lib/sourceRegistry.ts";
+import { getTrackerTabDefinition } from "../agent/lib/googleWorkspace/trackerSchemas.ts";
 import {
   budgetRequirement,
+  buildAccessibilityComplianceTaskRows,
   buildBudgetSheetUpdates,
+  buildDeadlineComplianceTaskRows,
+  buildDeadlinePlanSheet,
   buildFormFieldPackBody,
+  buildFormFieldPackSheet,
   buildInternalReviewSummaryBody,
   buildRiskAssessmentScalarReplacements,
+  plainGoogleDocText,
   type EventPackInput,
 } from "../agent/lib/eventPack.ts";
 import {
@@ -752,6 +759,59 @@ test("regular form field pack carries official regular-route fields", () => {
   assert.match(body, /Public\/open academic chair note, if relevant/);
 });
 
+test("form field pack sheet carries copy-ready rows and check columns", () => {
+  const sheet = buildFormFieldPackSheet(
+    {
+      eventId: "EVT-20261104-ai-startup-sprint-c91d",
+      eventName: "AI Startup Sprint",
+      proposedDate: "2026-11-04",
+      expectedAttendance: 120,
+      classificationRoute: "large_speaker_event",
+      externalSpeakers: [
+        {
+          name: "Speaker One",
+          role: "Founder",
+          organisation: "Example AI",
+          topic: "AI startups",
+        },
+      ],
+      sponsorInvolved: true,
+      sponsorName: "Example Sponsor",
+      missingCriticalFields: ["Academic chair status"],
+    },
+    {
+      riskAssessmentLink: "https://docs.google.com/document/d/risk/edit",
+      deadlinePlanLink: "https://docs.google.com/spreadsheets/d/deadline/edit",
+      accessibilityTasksStatus: "Tracked in Compliance Tasks (7 rows).",
+    },
+  );
+
+  assert.equal(sheet.sheetTitle, "Form Fields");
+  assert.deepEqual(sheet.values[0], [
+    "Section",
+    "Official form field",
+    "Draft answer",
+    "Entered?",
+    "Needs review?",
+    "Notes",
+  ]);
+  assert.deepEqual(sheet.checkboxColumns, [4]);
+  assert.ok(
+    sheet.values.some(
+      (row) => row[1] === "Attendee registration / entry plan" && row[3] === false,
+    ),
+  );
+  assert.ok(
+    sheet.values.some(
+      (row) => row[1] === "Accessibility tasks" && String(row[2]).includes("Compliance Tasks"),
+    ),
+  );
+  assert.ok(
+    sheet.values.some(
+      (row) => row[1] === "Academic chair status" && row[4] === "yes",
+    ),
+  );
+});
 test("large speaker form field pack carries manual submission and promotion gates", () => {
   const body = buildFormFieldPackBody(
     {
@@ -819,3 +879,184 @@ test("internal review summary uses the actual budget generation decision", () =>
 
 
 
+
+test("plain Google Doc text strips Markdown syntax before support docs are written", () => {
+  const raw = `# LSESU Form Field Pack
+
+## Core Event Fields
+
+| Official form field | Draft answer |
+|---|---|
+| What is the name of your event? | AI Startup Sprint |
+| Budget attached? | Draft linked below |
+
+- [ ] Confirm venue accessibility.
+- Event ID: EVT-20261104-ai-startup-sprint-c91d
+`;
+  const body = plainGoogleDocText(raw);
+
+  assert.match(body, /^LSESU Form Field Pack$/m);
+  assert.match(body, /^Core Event Fields$/m);
+  assert.match(body, /What is the name of your event\?: AI Startup Sprint/);
+  assert.match(body, /Budget attached\?: Draft linked below/);
+  assert.match(body, /TODO: Confirm venue accessibility\./);
+  assert.match(body, /Event ID: EVT-20261104-ai-startup-sprint-c91d/);
+  assert.doesNotMatch(body, /^\s*#/m);
+  assert.doesNotMatch(body, /^\|/m);
+  assert.doesNotMatch(body, /- \[ \]/);
+});
+
+test("deadline sheet rows match compliance task upsert keys", () => {
+  const input = {
+    eventId: "EVT-20261104-ai-startup-sprint-c91d",
+    eventName: "AI Startup Sprint",
+    organiserName: "Velocity President",
+    deadlines: [
+      {
+        task: "Submit large event form",
+        dueDate: "2026-08-31",
+        deadlineType: "hard_gate",
+        sourceRule: "Large event term deadline",
+        blocksFinalSubmissionReadiness: true,
+        notes: ["Verify current academic year."],
+      },
+    ],
+  };
+  const sheet = buildDeadlinePlanSheet(input);
+  const taskRows = buildDeadlineComplianceTaskRows(input);
+
+  const changedDateRows = buildDeadlineComplianceTaskRows({
+    ...input,
+    deadlines: [{ ...input.deadlines[0], dueDate: "2026-09-01" }],
+  });
+  const reorderedRows = buildDeadlineComplianceTaskRows({
+    ...input,
+    deadlines: [
+      {
+        task: "Confirm catering request",
+        dueDate: "2026-10-21",
+        deadlineType: "dependency",
+        sourceRule: "Catering lead time",
+      },
+      input.deadlines[0],
+    ],
+  });
+
+  assert.equal(sheet.sheetTitle, "Deadline Plan");
+  assert.equal(sheet.values[1][0], taskRows[0]["Task ID"]);
+  assert.equal(sheet.values[1][3], "Submit large event form");
+  assert.equal(taskRows[0]["Blocker?"], "yes");
+  assert.equal(taskRows[0].Owner, "Velocity President");
+  assert.doesNotMatch(String(taskRows[0]["Task ID"]), /deadline-01-/);
+  assert.equal(changedDateRows[0]["Task ID"], taskRows[0]["Task ID"]);
+  assert.equal(reorderedRows[1]["Task ID"], taskRows[0]["Task ID"]);
+});
+
+test("accessibility checklist is represented as compliance task rows", () => {
+  const rows = buildAccessibilityComplianceTaskRows({
+    eventId: "EVT-20261104-ai-startup-sprint-c91d",
+    eventName: "AI Startup Sprint",
+    organiserName: "Velocity President",
+    preferredLocation: "MAR 2.08",
+    foodOrRefreshments: true,
+    deadlines: [
+      {
+        task: "Internal target",
+        dueDate: "2026-08-24",
+        deadlineType: "internal_gate",
+      },
+    ],
+  });
+
+  assert.equal(rows.length, 7);
+  assert.ok(rows.every((row) => String(row["Task ID"]).includes("accessibility")));
+  assert.equal(rows[0]["Due Date"], "2026-08-24");
+  assert.equal(rows.find((row) => String(row["Task ID"]).endsWith("request-route"))?.["Blocker?"], "yes");
+  assert.equal(rows.find((row) => String(row["Task ID"]).endsWith("food-allergens"))?.["Blocker?"], "yes");
+});
+test("batch tracker upsert reads once and writes mixed task rows together", async () => {
+  const originalEnv = {
+    GOOGLE_SERVICE_ACCOUNT_JSON_BASE64: process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64,
+    GOOGLE_DRIVE_ROOT_FOLDER_ID: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
+    GOOGLE_TRACKERS_SPREADSHEET_ID: process.env.GOOGLE_TRACKERS_SPREADSHEET_ID,
+  };
+  const credentials = {
+    client_email: "service@example.iam.gserviceaccount.com",
+    private_key: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+  };
+  process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 = Buffer.from(
+    JSON.stringify(credentials),
+  ).toString("base64");
+  process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID = "drive-root";
+  process.env.GOOGLE_TRACKERS_SPREADSHEET_ID = "tracker-sheet";
+
+  const headers = getTrackerTabDefinition("Compliance Tasks")?.headers ?? [];
+  const calls = {
+    get: [] as unknown[],
+    batchUpdate: [] as unknown[],
+    append: [] as unknown[],
+  };
+  const existing = headers.map((header) => {
+    if (header === "Task ID") return "task-existing";
+    if (header === "Event ID") return "EVT-20261104-ai-startup-sprint-c91d";
+    if (header === "Task") return "Old task";
+    return "";
+  });
+  const fakeClient = {
+    spreadsheets: {
+      values: {
+        get: async (args: unknown) => {
+          calls.get.push(args);
+          const range = (args as { range: string }).range;
+          return range.endsWith("!1:1")
+            ? { data: { values: [headers] } }
+            : { data: { values: [existing] } };
+        },
+        batchUpdate: async (args: unknown) => {
+          calls.batchUpdate.push(args);
+          return { data: {} };
+        },
+        append: async (args: unknown) => {
+          calls.append.push(args);
+          return { data: { updates: { updatedRange: "'Compliance Tasks'!A3:K3" } } };
+        },
+      },
+    },
+  };
+
+  try {
+    const result = await upsertTrackerRows({
+      tabName: "Compliance Tasks",
+      keyColumn: "Task ID",
+      rows: [
+        {
+          "Task ID": "task-existing",
+          "Event ID": "EVT-20261104-ai-startup-sprint-c91d",
+          Task: "Updated task",
+          Owner: "Velocity President",
+        },
+        {
+          "Task ID": "task-new",
+          "Event ID": "EVT-20261104-ai-startup-sprint-c91d",
+          Task: "New task",
+          Owner: "Velocity President",
+        },
+      ],
+      client: fakeClient as never,
+    });
+
+    assert.equal(result.updatedRows, 1);
+    assert.equal(result.appendedRows, 1);
+    assert.equal(calls.get.length, 2);
+    assert.equal(calls.batchUpdate.length, 1);
+    assert.equal(calls.append.length, 1);
+  } finally {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});

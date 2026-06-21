@@ -7,6 +7,7 @@ import {
 } from "./client.js";
 
 const GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document";
+const GOOGLE_SHEET_MIME_TYPE = "application/vnd.google-apps.spreadsheet";
 
 function getDriveClient(client?: drive_v3.Drive) {
   return client ?? createDriveClient();
@@ -52,6 +53,32 @@ export async function copyDriveFileToFolder({
     supportsAllDrives: true,
     requestBody: {
       name,
+      parents: [parentFolderId],
+      appProperties,
+    },
+  });
+
+  return fileOutput(response.data);
+}
+
+export async function createGoogleSheetFile({
+  parentFolderId,
+  name,
+  appProperties,
+  driveClient,
+}: {
+  parentFolderId: string;
+  name: string;
+  appProperties?: Record<string, string>;
+  driveClient?: drive_v3.Drive;
+}) {
+  const drive = getDriveClient(driveClient);
+  const response = await drive.files.create({
+    fields: "id,name,mimeType,webViewLink,appProperties",
+    supportsAllDrives: true,
+    requestBody: {
+      name,
+      mimeType: GOOGLE_SHEET_MIME_TYPE,
       parents: [parentFolderId],
       appProperties,
     },
