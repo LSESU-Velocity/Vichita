@@ -7,7 +7,7 @@ export const EventInput = z.object({
     .string()
     .optional()
     .describe(
-      "Raw user event description, including date, venue, travel, accommodation, and attendee wording when available.",
+      "Raw user event description. Used for context and notes only; trip routing is driven by the structured flags below, which you set from the meaning of the prompt.",
     ),
   preferredLocation: z
     .string()
@@ -36,104 +36,37 @@ export const EventInput = z.object({
     .boolean()
     .default(false)
     .describe(
-      "True only when the prompt explicitly says travel beyond/outside the M25, outside London, or a destination away from the normal venue context.",
+      "Set true when the event takes attendees to a destination away from the society's normal venue/area — e.g. beyond or outside the M25, outside London, or another town or city. This is the primary trip signal: judge it from the meaning of the prompt (including place names), not from specific keywords. Do not set it for an event at the usual venue.",
     ),
   overnightTrip: z
     .boolean()
     .default(false)
     .describe(
-      "True only when the prompt explicitly describes an overnight trip, overnight accommodation, hotel/hostel stay, residential, tour, or travel away. Do not infer this from a multi-day event at one venue.",
+      "Set true only for an overnight stay AWAY from the normal venue (accommodation at or near a destination). Do NOT set it for an on-site overnight at the usual venue, e.g. a hackathon where participants sleep at the venue.",
     ),
   externalVenue: z.boolean().default(false),
   multiDayAtSingleVenue: z
     .boolean()
     .default(false)
     .describe(
-      "True when an event spans multiple days but is held at one ordinary venue. This is not a trip signal by itself.",
-    ),
-  tripSignals: z
-    .array(z.string())
-    .default([])
-    .describe(
-      "Short source phrases that support a trip classification, such as coach travel, hotel accommodation, beyond M25, Oxford trip, or tour.",
+      "Set true when the event spans multiple days but is held at one ordinary on-site venue (e.g. a multi-day hackathon at the usual hub). This is not a trip on its own.",
     ),
 });
 
 type EventClassificationInput = z.input<typeof EventInput>;
 
-const BEYOND_M25_RE =
-  /\b(?:beyond|outside)\s+(?:the\s+)?m25\b|\boutside london\b|\bleav(?:e|ing) london\b/iu;
-const OVERNIGHT_AWAY_RE =
-  /\b(?:overnight\s+(?:trip|stay|stays|accommodation)|stay(?:ing)? overnight|hotel|hostel|accommodation|residential)\b/iu;
-const EXPLICIT_TRIP_RE = /\b(?:trip|tour)\b/iu;
-const TRAVEL_PLANNING_RE =
-  /\b(?:coach|train|flight|ferry|transport|travel(?:ling|ing)?|journey|departure|departing|return journey)\b/iu;
-const SINGLE_VENUE_RE =
-  /\b(?:single|same|one)\s+venue\b|\blse generate\b|\bgenerate hub\b|\blse\b|\bcampus\b|\bstudent centre\b/iu;
-const DATE_RANGE_RE =
-  /\bmulti[-\s]?day\b|\bover\s+\d+\s+days\b|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:to|-)\s*\d{1,2}(?:st|nd|rd|th)?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\s*(?:to|-)\s*(?:\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*)\b/iu;
+// The only deterministic prose check that remains is a purely informational note
+// about external/public attendance. It never affects routing.
 const EXTERNAL_ATTENDEE_RE =
   /\b(?:students? from other universities|other universities|kcl|ucl|imperial|king'?s college|external students?|non-lse attendees?)\b/iu;
 
-function tripEvidenceText(input: z.infer<typeof EventInput>) {
-  return [
-    input.eventDescription,
-    input.preferredLocation,
-    ...input.tripSignals,
-  ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+function attendeeNoteText(input: z.infer<typeof EventInput>) {
+  return [input.eventDescription, input.preferredLocation]
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .join("\n");
-}
-
-function hasSourceEvidence(text: string) {
-  return text.trim().length > 0;
-}
-
-function stripNegatedTripPhrases(text: string) {
-  return text
-    .replace(/\bno\s+travel\s+or\s+accommodation(?:\s+is\s+planned)?\b/giu, "")
-    .replace(/\b(?:no|not|without)\s+(?:travel|transport|accommodation|overnight stays?|trip|tour)\b/giu, "");
-}
-
-function inferTripProcess(input: z.infer<typeof EventInput>) {
-  const evidenceText = stripNegatedTripPhrases(tripEvidenceText(input));
-  const hasEvidence = hasSourceEvidence(evidenceText);
-  const explicitBeyondM25 = BEYOND_M25_RE.test(evidenceText);
-  const explicitOvernightAway = OVERNIGHT_AWAY_RE.test(evidenceText);
-  const explicitTrip = EXPLICIT_TRIP_RE.test(evidenceText);
-  const explicitTravelPlanning = TRAVEL_PLANNING_RE.test(evidenceText);
-
-  if (!hasEvidence) {
-    return {
-      isTrip: input.tripBeyondM25 || input.overnightTrip,
-      reason: input.tripBeyondM25 || input.overnightTrip
-        ? "Trip beyond M25 or overnight trip"
-        : undefined,
-      ignoredTripFlags: false,
-    };
-  }
-
-  const isTrip =
-    explicitBeyondM25 ||
-    explicitOvernightAway ||
-    explicitTrip ||
-    (input.tripBeyondM25 && (explicitBeyondM25 || explicitTravelPlanning)) ||
-    (input.overnightTrip && (explicitOvernightAway || explicitTravelPlanning));
-
-  return {
-    isTrip,
-    reason: explicitBeyondM25
-      ? "Explicit beyond-M25 or outside-London travel signal"
-      : explicitOvernightAway
-        ? "Explicit overnight accommodation or residential trip signal"
-        : explicitTrip
-          ? "Explicit trip or tour wording"
-          : isTrip
-            ? "Explicit travel planning signal"
-            : undefined,
-    ignoredTripFlags:
-      (input.tripBeyondM25 || input.overnightTrip) && !isTrip,
-  };
 }
 
 export function classifyEventInput(rawInput: EventClassificationInput) {
@@ -143,7 +76,6 @@ export function classifyEventInput(rawInput: EventClassificationInput) {
   const humanReview: string[] = [];
   const missingCriticalFields: string[] = [];
   const blocksFinalSubmissionReadiness: string[] = [];
-  const evidenceText = tripEvidenceText(input);
 
   if (typeof input.expectedAttendance !== "number") {
     missingCriticalFields.push("Expected attendance");
@@ -153,33 +85,24 @@ export function classifyEventInput(rawInput: EventClassificationInput) {
     );
   }
 
-  if (
-    input.multiDayAtSingleVenue ||
-    (SINGLE_VENUE_RE.test(evidenceText) && DATE_RANGE_RE.test(evidenceText))
-  ) {
-    nonTriggers.push(
-      "Multi-day duration at one named venue does not trigger the trips process.",
-    );
-  }
+  // Trip routing trusts the model's structured flags: the model owns the
+  // "is this away / overnight away?" judgement (it can read place names and
+  // phrasing that deterministic code cannot). The single correction applied here
+  // is the common over-flag — an on-site multi-day event (e.g. a hackathon at the
+  // usual venue, possibly with an on-site overnight stay) where the model set
+  // overnightTrip but did NOT assert beyond-M25 travel or an external venue.
+  const tripFlagged = input.tripBeyondM25 || input.overnightTrip;
+  const onSiteOvernightOnly =
+    !input.tripBeyondM25 &&
+    input.multiDayAtSingleVenue &&
+    !input.externalVenue;
 
-  if (EXTERNAL_ATTENDEE_RE.test(evidenceText)) {
-    nonTriggers.push(
-      "External university attendees do not imply travel or the trips process.",
+  if (tripFlagged && !onSiteOvernightOnly) {
+    triggers.push(
+      input.tripBeyondM25
+        ? "Trip beyond the M25 / away from the normal venue"
+        : "Overnight trip with accommodation away from the normal venue",
     );
-  }
-
-  const tripDecision = inferTripProcess(input);
-  if (tripDecision.ignoredTripFlags) {
-    nonTriggers.push(
-      "Trip flags were ignored because the source text did not include actual travel, beyond-M25, trip, tour, or accommodation evidence.",
-    );
-    humanReview.push(
-      "Check trip status only if travel or accommodation planning is later added.",
-    );
-  }
-
-  if (tripDecision.isTrip) {
-    triggers.push(tripDecision.reason ?? "Trip beyond M25 or overnight trip");
     return {
       route: "trip_process",
       triggers,
@@ -193,6 +116,26 @@ export function classifyEventInput(rawInput: EventClassificationInput) {
         "Draft aid only. Check current SU guidance and live forms before submission.",
       rulesLastVerifiedDate: process.env.RULES_LAST_VERIFIED_DATE ?? "2026-06-21",
     };
+  }
+
+  // Non-trip from here. Record the single-venue context, the external-attendee
+  // note, and — when a trip flag was set but demoted — a human-review prompt.
+  if (input.multiDayAtSingleVenue) {
+    nonTriggers.push(
+      "Multi-day duration at one named venue does not trigger the trips process.",
+    );
+  }
+
+  if (EXTERNAL_ATTENDEE_RE.test(attendeeNoteText(input))) {
+    nonTriggers.push(
+      "External university attendees do not imply travel or the trips process.",
+    );
+  }
+
+  if (tripFlagged && onSiteOvernightOnly) {
+    humanReview.push(
+      "Overnight was flagged but the event is multi-day at one on-site venue with no beyond-M25 travel; confirm there is no off-site trip before ruling out the trips process.",
+    );
   }
 
   const hasSpeaker = input.externalSpeakers.length > 0;
@@ -271,7 +214,7 @@ export function classifyEventInput(rawInput: EventClassificationInput) {
 
 export default defineTool({
   description:
-    "Classify a proposed society event into a draft LSESU route and list triggers/blockers. Multi-day duration at one venue is not a trip; classify trips only from explicit trip, travel, beyond-M25, or accommodation signals.",
+    "Classify a proposed society event into a draft LSESU route and list triggers/blockers. Trip routing is driven by the structured tripBeyondM25 / overnightTrip / multiDayAtSingleVenue flags you set from the meaning of the prompt (including place names). A multi-day event at one on-site venue — even with an on-site overnight stay — is not a trip.",
   inputSchema: EventInput,
   async execute(input) {
     return classifyEventInput(input);

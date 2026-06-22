@@ -1,5 +1,3 @@
-export const EVE_SLACK_INTERNAL_ROUTE = "/triggers/slack/eve";
-
 type SlackInteractionPayload = {
   readonly type?: unknown;
 };
@@ -21,18 +19,4 @@ export function isSlackViewSubmissionBody(
   } catch {
     return false;
   }
-}
-
-export function slackInternalRouteUrl(requestUrl: string) {
-  const url = new URL(requestUrl);
-  url.pathname = EVE_SLACK_INTERNAL_ROUTE;
-  url.search = "";
-  return url;
-}
-
-export function buildSlackForwardHeaders(headers: Headers) {
-  const forwarded = new Headers(headers);
-  forwarded.delete("host");
-  forwarded.delete("content-length");
-  return forwarded;
 }

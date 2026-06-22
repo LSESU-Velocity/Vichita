@@ -1,9 +1,66 @@
 import { connectSlackCredentials } from "@vercel/connect/eve";
-import { slackChannel } from "eve/channels/slack";
+import type { HttpRouteDefinition } from "eve/channels";
+import { slackChannel, type SlackChannelState } from "eve/channels/slack";
 
-export default slackChannel({
-  route: "/triggers/slack/eve",
+import { isSlackViewSubmissionBody } from "../lib/slackProxy.js";
+
+const slack = slackChannel({
+  route: "/triggers/slack",
   credentials: connectSlackCredentials(
     process.env.SLACK_CONNECTOR ?? "slack/vichita",
   ),
 });
+
+function replayRequestWithBody(req: Request, body: string) {
+  return new Request(req.url, {
+    method: req.method,
+    headers: req.headers,
+    body,
+  });
+}
+
+const routes = slack.routes.map((route) => {
+  if (
+    route.transport === "websocket" ||
+    route.method !== "POST" ||
+    route.path !== "/triggers/slack"
+  ) {
+    return route;
+  }
+
+  const slackPostRoute = route as HttpRouteDefinition<SlackChannelState>;
+  return {
+    ...slackPostRoute,
+    async handler(
+      req: Request,
+      args: Parameters<typeof slackPostRoute.handler>[1],
+    ) {
+      const contentType = req.headers.get("content-type");
+      if (!contentType?.includes("application/x-www-form-urlencoded")) {
+        return slackPostRoute.handler(req, args);
+      }
+
+      const body = await req.text();
+      const response = await slackPostRoute.handler(
+        replayRequestWithBody(req, body),
+        args,
+      );
+
+      if (response.ok && isSlackViewSubmissionBody(contentType, body)) {
+        // Eve 0.11.7 records the modal answer correctly but returns "ok";
+        // Slack view submissions expect an empty 200 ACK.
+        return new Response(null, {
+          status: 200,
+          headers: { "cache-control": "no-store" },
+        });
+      }
+
+      return response;
+    },
+  } satisfies HttpRouteDefinition<SlackChannelState>;
+});
+
+export default {
+  ...slack,
+  routes,
+} satisfies typeof slack;

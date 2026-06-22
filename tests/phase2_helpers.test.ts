@@ -35,10 +35,7 @@ import {
   upsertTrackerRows,
 } from "../agent/lib/googleWorkspace/sheets.ts";
 import { buildSourceRegistryEntry } from "../agent/lib/sourceRegistry.ts";
-import {
-  isSlackViewSubmissionBody,
-  slackInternalRouteUrl,
-} from "../agent/lib/slackProxy.ts";
+import { isSlackViewSubmissionBody } from "../agent/lib/slackProxy.ts";
 import { classifyEventInput } from "../agent/tools/classify_event.ts";
 import { getTrackerTabDefinition } from "../agent/lib/googleWorkspace/trackerSchemas.ts";
 import {
@@ -1379,7 +1376,7 @@ test("batch tracker upsert reads once and writes mixed task rows together", asyn
   }
 });
 
-test("slack proxy recognises modal submissions and targets the internal Eve Slack route", () => {
+test("slack modal helper recognises view submissions", () => {
   const body = new URLSearchParams({
     payload: JSON.stringify({
       type: "view_submission",
@@ -1392,10 +1389,6 @@ test("slack proxy recognises modal submissions and targets the internal Eve Slac
     true,
   );
   assert.equal(isSlackViewSubmissionBody("application/json", body), false);
-  assert.equal(
-    slackInternalRouteUrl("https://vichita.vercel.app/triggers/slack?retry=1").toString(),
-    "https://vichita.vercel.app/triggers/slack/eve",
-  );
 });
 
 test("classifier treats a multi-day single-venue hackathon as large event, not trip", () => {
@@ -1453,4 +1446,189 @@ test("classifier does not treat external universities attending as a trip", () =
       /External university attendees/.test(entry),
     ),
   );
+});
+
+test("classifier does not promote venue keywords to trips without trip flags", () => {
+  const hotelGala = classifyEventInput({
+    eventName: "Sponsor Gala Dinner",
+    eventDescription: "A gala dinner at the Marriott Hotel for 50 people.",
+    expectedAttendance: 50,
+  });
+  const campusTour = classifyEventInput({
+    eventName: "Freshers Welcome",
+    eventDescription: "Freshers welcome including a short campus tour.",
+    expectedAttendance: 50,
+  });
+
+  assert.equal(hotelGala.route, "regular_event_candidate");
+  assert.equal(campusTour.route, "regular_event_candidate");
+});
+
+test("classifier demotes an on-site overnight but trusts an away overnight flag", () => {
+  // overnightTrip + multiDayAtSingleVenue with no beyond-M25 travel = an on-site
+  // overnight at the usual venue, which is not a trip.
+  const onSiteOvernight = classifyEventInput({
+    eventName: "On-site Hack",
+    eventDescription:
+      "A multi-day hackathon at the LSE Generate hub where some participants sleep on-site.",
+    expectedAttendance: 100,
+    overnightTrip: true,
+    multiDayAtSingleVenue: true,
+  });
+  // A bare overnightTrip flag is the model's away-overnight judgement and is trusted.
+  const awayOvernight = classifyEventInput({
+    eventName: "Away Overnight",
+    expectedAttendance: 40,
+    overnightTrip: true,
+  });
+
+  assert.equal(onSiteOvernight.route, "large_event");
+  assert.equal(awayOvernight.route, "trip_process");
+  assert.ok(
+    onSiteOvernight.humanReview.some((entry) => /off-site trip/.test(entry)),
+  );
+});
+
+test("classifier preserves explicitly flagged beyond-M25 day trips", () => {
+  const result = classifyEventInput({
+    eventName: "Thorpe Park Day Trip",
+    eventDescription: "Taking the team to Thorpe Park for the day.",
+    expectedAttendance: 40,
+    tripBeyondM25: true,
+  });
+
+  assert.equal(result.route, "trip_process");
+
+  const noOvernight = classifyEventInput({
+    eventName: "Oxford Founder Visit",
+    eventDescription:
+      "Taking the team outside London to Oxford for the day, not staying overnight.",
+    expectedAttendance: 35,
+    tripBeyondM25: true,
+  });
+
+  assert.equal(noOvernight.route, "trip_process");
+});
+
+test("classifier preserves real trips when transport is not provided", () => {
+  const dayTrip = classifyEventInput({
+    eventName: "Bletchley Park Visit",
+    eventDescription:
+      "A day trip outside London to Bletchley Park. No transport is provided; attendees make their own way.",
+    expectedAttendance: 30,
+    tripBeyondM25: true,
+  });
+  const residential = classifyEventInput({
+    eventName: "Oxford Residential Retreat",
+    eventDescription:
+      "An overnight residential retreat in Oxford with hostel accommodation. No transport is provided; attendees make their own way.",
+    expectedAttendance: 30,
+    overnightTrip: true,
+  });
+
+  assert.equal(dayTrip.route, "trip_process");
+  assert.equal(residential.route, "trip_process");
+});
+
+test("classifier preserves explicit multi-day trips that mention the home campus", () => {
+  // A departure-point mention of LSE/campus plus a date range must not let the
+  // multi-day-single-venue heuristic demote an explicitly flagged trip.
+  const lakeDistrict = classifyEventInput({
+    eventName: "Lake District Retreat",
+    eventDescription:
+      "An overnight residential trip beyond the M25 to the Lake District, departing from LSE, 28th to 30th March.",
+    expectedAttendance: 30,
+    tripBeyondM25: true,
+    overnightTrip: true,
+    multiDayAtSingleVenue: true,
+  });
+  const oxfordCoach = classifyEventInput({
+    eventName: "Oxford Hack Exchange",
+    eventDescription:
+      "A multi-day coach trip to Oxford with an overnight hostel stay. The coach leaves campus on Friday.",
+    expectedAttendance: 40,
+    overnightTrip: true,
+  });
+
+  assert.equal(lakeDistrict.route, "trip_process");
+  assert.doesNotMatch(
+    lakeDistrict.nonTriggers.join("\n"),
+    /Multi-day duration at one named venue/,
+  );
+  assert.equal(oxfordCoach.route, "trip_process");
+});
+
+test("classifier trusts the away flag, not prose, for trip routing", () => {
+  // Real away trip: the model sets tripBeyondM25, so it routes to the trips
+  // process regardless of unrelated campus-tour wording in the description.
+  const awayTrip = classifyEventInput({
+    eventName: "Oxford Day Visit",
+    eventDescription:
+      "A campus tour at LSE followed by a trip to Oxford for the day.",
+    expectedAttendance: 30,
+    tripBeyondM25: true,
+  });
+  // When the prompt negates the trip, the model leaves the flag unset, so it
+  // routes as a normal event with no prose-negation parsing required.
+  const notATrip = classifyEventInput({
+    eventName: "Campus-only Session",
+    eventDescription:
+      "This is not a trip to Oxford; it is a campus tour at LSE only.",
+    expectedAttendance: 30,
+  });
+
+  assert.equal(awayTrip.route, "trip_process");
+  assert.equal(notATrip.route, "regular_event_candidate");
+});
+
+test("classifier routes an away or external-venue overnight to the trips process", () => {
+  // Away destination: the model sets tripBeyondM25 (it does not mark an off-site
+  // destination as multiDayAtSingleVenue).
+  const brightonHotel = classifyEventInput({
+    eventName: "Brighton Hack Retreat",
+    eventDescription:
+      "A two-day hack retreat in Brighton with hotel accommodation overnight.",
+    expectedAttendance: 30,
+    tripBeyondM25: true,
+    overnightTrip: true,
+  });
+  // externalVenue overrides the on-site demotion even when multiDayAtSingleVenue
+  // is also set: a multi-day overnight at an external venue is still a trip.
+  const externalVenueOvernight = classifyEventInput({
+    eventName: "Residential Bootcamp",
+    eventDescription:
+      "A two-day residential bootcamp at an external venue with hostel accommodation booked off-site overnight.",
+    expectedAttendance: 35,
+    overnightTrip: true,
+    multiDayAtSingleVenue: true,
+    externalVenue: true,
+  });
+
+  assert.equal(brightonHotel.route, "trip_process");
+  assert.equal(externalVenueOvernight.route, "trip_process");
+});
+
+test("classifier keeps an on-site overnight at a single venue out of the trips process", () => {
+  // Accommodation/overnight wording alone - with no transport or destination
+  // beyond the home venue - must not override an explicit single-venue assertion.
+  // Multi-day hackathons routinely run overnight on-site at the home campus.
+  const residentialStyle = classifyEventInput({
+    eventName: "Residential-style Hack",
+    eventDescription:
+      "A multi-day residential-style coding hackathon at the LSE Generate hub, 28th to 30th.",
+    expectedAttendance: 80,
+    overnightTrip: true,
+    multiDayAtSingleVenue: true,
+  });
+  const onSiteOvernight = classifyEventInput({
+    eventName: "48h Hack",
+    eventDescription:
+      "A 48-hour hackathon at the LSE Generate hub with an overnight stay for participants who keep coding, 28th to 30th.",
+    expectedAttendance: 100,
+    overnightTrip: true,
+    multiDayAtSingleVenue: true,
+  });
+
+  assert.equal(residentialStyle.route, "large_event");
+  assert.equal(onSiteOvernight.route, "large_event");
 });
