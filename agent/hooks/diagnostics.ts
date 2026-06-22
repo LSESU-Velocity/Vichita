@@ -60,6 +60,21 @@ export default defineHook({
         turnId: event.data.turnId,
         stepIndex: event.data.stepIndex,
         requestCount: event.data.requests.length,
+        requests: event.data.requests.map((request) => ({
+          requestId: request.requestId,
+          display: request.display,
+          allowFreeform: request.allowFreeform === true,
+          optionCount: request.options?.length ?? 0,
+          toolName: request.action.toolName,
+          callId: request.action.callId,
+        })),
+      }));
+    },
+    "session.waiting"(event, ctx) {
+      safeInfo("[vichita] session.waiting", () => ({
+        sessionId: ctx.session.id,
+        channel: ctx.channel.kind,
+        wait: event.data.wait,
       }));
     },
     "action.result"(event, ctx) {

@@ -6,12 +6,14 @@ Vichita provides draft internal readiness guidance only. LSESU's current public 
 
 Core route logic:
 
-1. Trips beyond the M25 or overnight trips should use the trips process.
-2. Any external speaker means the event is at least a speaker event.
-3. Expected attendance over 75 means large event. Exactly 75 does not trigger the over-75 rule.
-4. Estimated budget over GBP 500 means large event. Exactly GBP 500 does not trigger the over-500 rule.
-5. External organisation involvement, alcohol-centred activity, vulnerable attendees, or unusual risk should trigger human review or large/speaker handling.
-6. Missing or uncertain attendance must produce a missing-field warning. Do not silently classify it as a regular event.
+1. Trips require actual trip or travel signals: beyond/outside the M25, leaving London, transport planning, overnight accommodation away from normal venue context, residential/tour wording, or explicit trip wording.
+2. Multi-day duration alone is not a trip signal. A multi-day hackathon, conference, or build sprint at one named venue remains an event route unless actual travel/accommodation/trip wording is present.
+3. External universities attending, for example KCL or UCL students, does not imply a trip. Treat it as public/non-LSE attendance or academic-chair context where relevant.
+4. Any external speaker means the event is at least a speaker event.
+5. Expected attendance over 75 means large event. Exactly 75 does not trigger the over-75 rule.
+6. Estimated budget over GBP 500 means large event. Exactly GBP 500 does not trigger the over-500 rule.
+7. External organisation involvement, alcohol-centred activity, vulnerable attendees, or unusual risk should trigger human review or large/speaker handling.
+8. Missing or uncertain attendance must produce a missing-field warning. Do not silently classify it as a regular event.
 
 Deadline handling:
 

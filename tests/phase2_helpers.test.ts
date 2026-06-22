@@ -35,6 +35,11 @@ import {
   upsertTrackerRows,
 } from "../agent/lib/googleWorkspace/sheets.ts";
 import { buildSourceRegistryEntry } from "../agent/lib/sourceRegistry.ts";
+import {
+  isSlackViewSubmissionBody,
+  slackInternalRouteUrl,
+} from "../agent/lib/slackProxy.ts";
+import { classifyEventInput } from "../agent/tools/classify_event.ts";
 import { getTrackerTabDefinition } from "../agent/lib/googleWorkspace/trackerSchemas.ts";
 import {
   budgetRequirement,
@@ -1372,4 +1377,80 @@ test("batch tracker upsert reads once and writes mixed task rows together", asyn
       }
     }
   }
+});
+
+test("slack proxy recognises modal submissions and targets the internal Eve Slack route", () => {
+  const body = new URLSearchParams({
+    payload: JSON.stringify({
+      type: "view_submission",
+      view: { callback_id: "eve_input_freeform_submit" },
+    }),
+  }).toString();
+
+  assert.equal(
+    isSlackViewSubmissionBody("application/x-www-form-urlencoded", body),
+    true,
+  );
+  assert.equal(isSlackViewSubmissionBody("application/json", body), false);
+  assert.equal(
+    slackInternalRouteUrl("https://vichita.vercel.app/triggers/slack?retry=1").toString(),
+    "https://vichita.vercel.app/triggers/slack/eve",
+  );
+});
+
+test("classifier treats a multi-day single-venue hackathon as large event, not trip", () => {
+  const result = classifyEventInput({
+    eventName: "Global Build 2027",
+    eventDescription:
+      "Create an event pack for February 27-Mar 1, a hackathon called Global Build 2027 at the LSE Generate hub. Around 100 people are expected, including students from KCL and UCL. Food is sponsored by Base for GBP 500.",
+    expectedAttendance: 100,
+    estimatedBudgetGbp: 500,
+    sponsorInvolved: true,
+    overnightTrip: true,
+    multiDayAtSingleVenue: true,
+  });
+
+  assert.equal(result.route, "large_event");
+  assert.ok(result.triggers.includes("Expected attendance over 75"));
+  assert.doesNotMatch(result.triggers.join("\n"), /trip|m25|overnight/i);
+  assert.ok(
+    result.nonTriggers.some((entry) =>
+      /Multi-day duration at one named venue/.test(entry),
+    ),
+  );
+  assert.ok(
+    result.nonTriggers.some((entry) =>
+      /External university attendees/.test(entry),
+    ),
+  );
+});
+
+test("classifier sends actual beyond-M25 overnight travel to the trips process", () => {
+  const result = classifyEventInput({
+    eventName: "Oxford Build Retreat",
+    eventDescription:
+      "A weekend trip to Oxford beyond the M25 with coach transport and hostel accommodation overnight.",
+    expectedAttendance: 35,
+    tripBeyondM25: true,
+    overnightTrip: true,
+  });
+
+  assert.equal(result.route, "trip_process");
+  assert.match(result.triggers.join("\n"), /beyond-M25|overnight|trip/i);
+});
+
+test("classifier does not treat external universities attending as a trip", () => {
+  const result = classifyEventInput({
+    eventName: "Inter-university Build Night",
+    eventDescription:
+      "A workshop at the LSE Generate hub with students from KCL and UCL attending. No travel or accommodation is planned.",
+    expectedAttendance: 60,
+  });
+
+  assert.equal(result.route, "regular_event_candidate");
+  assert.ok(
+    result.nonTriggers.some((entry) =>
+      /External university attendees/.test(entry),
+    ),
+  );
 });

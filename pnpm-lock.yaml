@@ -15,7 +15,7 @@ importers:
         specifier: 7.0.0-beta.178
         version: 7.0.0-beta.178(zod@4.4.3)
       eve:
-        specifier: latest
+        specifier: 0.11.7
         version: 0.11.7(ai@7.0.0-beta.178(zod@4.4.3))
       googleapis:
         specifier: 173.0.0
