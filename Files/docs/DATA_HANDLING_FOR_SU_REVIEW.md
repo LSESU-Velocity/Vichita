@@ -1,6 +1,6 @@
 # Vichita - Data Handling Note for LSESU Review
 
-Last updated: 2026-06-19
+Last updated: 2026-06-22
 
 This note is for checking the proposed Vichita Slack agent with LSESU before the bot is finalised. It is not legal advice and should be reviewed against current LSESU, LSE, and UK GDPR expectations.
 
@@ -15,6 +15,7 @@ The agent does **not** submit LSESU forms, sign contracts, send external message
 The MVP is deliberately limited:
 
 - Reactive only: the agent only acts when mentioned in Slack, used in a DM, or triggered through a Slack modal.
+- Slack modal answers are limited to the requested operational fields, for example event lead name/email. Runtime diagnostics should log request/session metadata only, not the submitted answer text.
 - No passive channel monitoring.
 - No proactive watching or scheduled scans.
 - No email drafting/sending.
@@ -29,7 +30,7 @@ The MVP is deliberately limited:
 
 | Data category | Examples | MVP status | Notes |
 |---|---|---|---|
-| Committee member data | Name, Slack user ID, committee role, LSE email | In scope | Needed for ownership and approval routing. |
+| Committee member data | Name, Slack user ID, committee role, LSE email | In scope | Needed for ownership, event lead fields, and approval routing. Slack modal submissions may collect this where the user provides it. |
 | Event data | Event name, date, time, location, expected attendance, food/alcohol, speaker status, budget | In scope | Stored in Google Sheets/Docs event trackers and generated packs. |
 | External speaker data | Name, job title, organisation, topic, public bio | In scope where relevant | Used only for draft LSESU field packs. SU background checks remain an SU process. |
 | Sponsor/business contact data | Sponsor company, contact name, role, business email, invoice contact | V2, not true MVP | Store only when sponsorship workflows are enabled and reviewed. |
@@ -42,8 +43,8 @@ The MVP is deliberately limited:
 
 | Location | What may be stored | Notes |
 |---|---|---|
-| Slack | User prompt, agent response, approval cards, links to generated files | Use private committee channels for admin work. Avoid pasting sensitive finance/banking details. |
-| Vercel runtime / logs / traces | Minimal request metadata and tool outcomes | Configure logging to avoid full document bodies and sensitive invoice/banking fields where possible. |
+| Slack | User prompt, agent response, modal submissions, approval cards, links to generated files | Use private committee channels for admin work. Avoid pasting sensitive finance/banking details. |
+| Vercel runtime / logs / traces | Minimal request metadata, tool outcomes, and non-sensitive diagnostic breadcrumbs | Configure logging to avoid full document bodies, modal answer text, and sensitive invoice/banking fields where possible. |
 | Google Drive | Generated event packs, risk assessments, budgets, sponsorship packs, finance checklists | Use a dedicated `Vichita` folder owned by the society Google account with restricted committee access. The agent service account should only be shared into this folder. |
 | Google Sheets | Trackers: events, packs index, marketing ops calendar, compliance tasks, sponsorship tracker later | Avoid storing unnecessary PII. Do not store bank details in tracker rows. |
 | Vercel Blob or object storage | Only if needed for temporary file export | Prefer Google Drive as source of truth. Delete temporary files after upload where possible. |

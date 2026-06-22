@@ -49,6 +49,12 @@ const Changes = z.object({
   eventName: z.string().min(1).optional(),
   eventDescription: z.string().optional(),
   proposedDate: z.string().optional(),
+  proposedEndDate: z
+    .string()
+    .optional()
+    .describe(
+      "Last day for a multi-day or rescheduled-range event (YYYY-MM-DD). Omit for a single-day event.",
+    ),
   setupStartTime: z.string().optional(),
   eventStartTime: z.string().optional(),
   eventEndTime: z.string().optional(),
@@ -90,7 +96,14 @@ const Input = z
     packFolderLink: z.string().url().optional(),
     sourceSlackChannelId: z.string().optional(),
     sourceSlackThreadTs: z.string().optional(),
-    packVersion: z.number().int().positive().default(1),
+    packVersion: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Existing pack version to patch. Leave unset to patch the single existing version; the tool fails and asks for this only when several versions exist in the folder.",
+      ),
     changes: Changes,
     updateTrackers: z.boolean().default(true),
     updateReason: z.string().optional(),
@@ -164,7 +177,7 @@ function text(value: string | undefined, fallback = "TBC") {
   return trimmed ? trimmed : fallback;
 }
 
-function parseDateTimeAnswer(value: string | undefined) {
+export function parseDateTimeAnswer(value: string | undefined) {
   const match = /^(.*?),\s*setup\s+([^,]+),\s*event\s+(.+?)-(.+)$/.exec(
     value?.trim() ?? "",
   );
@@ -178,7 +191,39 @@ function parseDateTimeAnswer(value: string | undefined) {
   };
 }
 
-function dateTimeAnswerFromChanges({
+function splitDateRangeLabel(label: string | undefined) {
+  const trimmed = label?.trim();
+  if (!trimmed) return { start: undefined, end: undefined } as const;
+  const match = /^(.*\S)\s+to\s+(\S.*)$/.exec(trimmed);
+  if (match) return { start: match[1].trim(), end: match[2].trim() } as const;
+  return { start: trimmed, end: undefined } as const;
+}
+
+// Resolves the human-facing event date label, supporting multi-day ranges.
+// A new start date (proposedDate) defaults to a single day; the prior end date
+// is only kept when restated via proposedEndDate, which avoids pairing a moved
+// start with a stale (possibly earlier) end date.
+export function eventDateLabelFromChanges({
+  changes,
+  currentDate,
+}: {
+  changes: z.infer<typeof Changes>;
+  currentDate?: string;
+}) {
+  const current = splitDateRangeLabel(currentDate);
+  const start = changes.proposedDate
+    ? displayDate(changes.proposedDate)
+    : current.start ?? "TBC";
+  const end = changes.proposedEndDate
+    ? displayDate(changes.proposedEndDate)
+    : changes.proposedDate
+      ? undefined
+      : current.end;
+
+  return end && end !== start ? `${start} to ${end}` : start;
+}
+
+export function dateTimeAnswerFromChanges({
   changes,
   currentAnswer,
 }: {
@@ -187,6 +232,7 @@ function dateTimeAnswerFromChanges({
 }) {
   const hasDateTimeChange = Boolean(
     changes.proposedDate !== undefined ||
+      changes.proposedEndDate !== undefined ||
       changes.setupStartTime !== undefined ||
       changes.eventStartTime !== undefined ||
       changes.eventEndTime !== undefined,
@@ -194,9 +240,10 @@ function dateTimeAnswerFromChanges({
   if (!hasDateTimeChange) return undefined;
 
   const current = parseDateTimeAnswer(currentAnswer);
-  const date = changes.proposedDate
-    ? displayDate(changes.proposedDate)
-    : current?.date ?? "TBC";
+  const date = eventDateLabelFromChanges({
+    changes,
+    currentDate: current?.date,
+  });
   const setup = changes.setupStartTime ?? current?.setupStartTime ?? "TBC";
   const start = changes.eventStartTime ?? current?.eventStartTime ?? "TBC";
   const end = changes.eventEndTime ?? current?.eventEndTime ?? "TBC";
@@ -204,9 +251,35 @@ function dateTimeAnswerFromChanges({
   return `${date}, setup ${setup}, event ${start}-${end}`;
 }
 
-function changedFieldNames(changes: z.infer<typeof Changes>) {
+// True only when a non-empty replacement deadline set was supplied. An empty
+// array is treated as "no deadlines supplied" so it can never blank-out the
+// existing deadline plan (buildDeadlinePlanSheet turns an empty list into a
+// single "Run compute_deadlines" placeholder row).
+function hasReplacementDeadlines(changes: z.infer<typeof Changes>) {
+  return Array.isArray(changes.deadlines) && changes.deadlines.length > 0;
+}
+
+// A date move shifts every deadline due date, but this tool only rewrites
+// deadline rows when replacement rows are supplied. Surfaces the gap so callers
+// recompute deadlines explicitly. See agent/instructions.md fast-path rules.
+export function changesRequireDeadlineRecompute(
+  changes: z.infer<typeof Changes>,
+) {
+  return (
+    (changes.proposedDate !== undefined ||
+      changes.proposedEndDate !== undefined) &&
+    !hasReplacementDeadlines(changes)
+  );
+}
+
+export function changedFieldNames(changes: z.infer<typeof Changes>) {
+  // Skip empty arrays (e.g. deadlines: []) so the update log / returned
+  // changedFields never claim a field changed when it was actually ignored.
   return Object.entries(changes)
-    .filter(([, value]) => value !== undefined)
+    .filter(
+      ([, value]) =>
+        value !== undefined && !(Array.isArray(value) && value.length === 0),
+    )
     .map(([key]) => key);
 }
 
@@ -259,6 +332,55 @@ async function findEventPackFile({
   }
 
   return files[0] ? fileOutput(files[0]) : undefined;
+}
+
+// Distinct vichitaPackVersion values stamped on the folder's pack files for
+// this event, ascending. Empty when the folder holds no versioned pack files.
+export async function listPackVersions({
+  drive,
+  folderId,
+  eventId,
+}: {
+  drive: drive_v3.Drive;
+  folderId: string;
+  eventId: string;
+}): Promise<number[]> {
+  const response = await drive.files.list({
+    q: [
+      "trashed = false",
+      `'${escapeDriveQueryValue(folderId)}' in parents`,
+      `appProperties has { key='vichitaEventId' and value='${escapeDriveQueryValue(eventId)}' }`,
+    ].join(" and "),
+    fields: "files(appProperties)",
+    spaces: "drive",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const versions = ((response.data.files ?? []) as ExistingFile[])
+    .map((file) => Number(file.appProperties?.vichitaPackVersion))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  return [...new Set(versions)].sort((a, b) => a - b);
+}
+
+// Chooses which pack version to patch. An explicit request always wins.
+// Otherwise patch the single existing version; refuse to guess when several
+// versions exist (the highest is not necessarily the active one — it may be an
+// archive snapshot), and fall back to v1 when the folder has no versioned
+// files yet (the no-files case is then caught downstream).
+export function choosePackVersion(
+  requested: number | undefined,
+  available: number[],
+): number {
+  if (requested !== undefined) return requested;
+  if (available.length > 1) {
+    throw new Error(
+      `This event pack has multiple versions (${available
+        .map((version) => `v${version}`)
+        .join(", ")}). Pass packVersion to choose which one to update.`,
+    );
+  }
+  return available[0] ?? 1;
 }
 
 async function readSheetValues({
@@ -600,17 +722,65 @@ function updateLogText({
   reason?: string;
   generatedBy?: string;
 }) {
-  const parts = [
-    `${new Date().toISOString()}: Updated ${changedFields.join(", ")}.`,
-  ];
+  const summary =
+    changedFields.length > 0
+      ? `Updated ${changedFields.join(", ")}.`
+      : "No field values changed.";
+  const parts = [`${new Date().toISOString()}: ${summary}`];
   if (reason?.trim()) parts.push(`Reason: ${reason.trim()}.`);
   if (generatedBy?.trim()) parts.push(`Updated by: ${generatedBy.trim()}.`);
   return parts.join(" ");
 }
 
+// Human-readable "field: new value" lines for the changed fields, so the
+// internal review summary records the actual corrected values rather than only
+// claiming which field names changed.
+function correctionValueLines({
+  changes,
+  dateTimeAnswer,
+}: {
+  changes: z.infer<typeof Changes>;
+  dateTimeAnswer?: string;
+}) {
+  const lines: string[] = [];
+  const add = (label: string, value: string | number | boolean | undefined) => {
+    if (value !== undefined && value !== "") lines.push(`- ${label}: ${value}`);
+  };
+
+  add("Event name", changes.eventName);
+  if (dateTimeAnswer) add("Date and time", dateTimeAnswer);
+  else if (changes.proposedDate) add("Date", displayDate(changes.proposedDate));
+  add("Location", changes.preferredLocation);
+  add("External venue", changes.externalVenueDetails);
+  add("Expected attendance", changes.expectedAttendance);
+  add("Organiser", changes.organiserName);
+  add("Organiser role", changes.organiserRole);
+  add("Organiser email", changes.organiserLseEmail);
+  add("Organiser contact", changes.organiserContactNumber);
+  add("First-aid plan", changes.firstAidPlan);
+  add("Food / refreshments", yesNo(changes.foodOrRefreshments));
+  add("Alcohol", yesNo(changes.alcohol));
+  add("Ticketing", changes.ticketingPlan);
+  add("Registration / entry", changes.attendeeRegistrationEntryPlan);
+  add("Academic chair status", changes.academicChairStatus);
+  add("External organisation involved", yesNo(changes.externalOrganisationInvolved));
+  add("External organisation name", changes.externalOrganisationName);
+  add("Sponsor involved", yesNo(changes.sponsorInvolved));
+  add("Sponsor name", changes.sponsorName);
+  if (changes.estimatedCost !== undefined) {
+    add("Estimated cost", `GBP ${changes.estimatedCost}`);
+  }
+  add("Event description", changes.eventDescription);
+  if (hasReplacementDeadlines(changes)) {
+    add("Deadlines", `${changes.deadlines?.length} replacement row(s) applied`);
+  }
+
+  return lines;
+}
+
 export default defineTool({
   description:
-    "Approval-gated Google Workspace update. Patch known fields in an existing generated event pack without creating a new pack or regenerating unchanged documents. Use for corrections like changed venue, attendance, organiser details, first-aid plan, form-field answers, or explicit replacement deadline rows. Before this tool, emit only a short proposal, max 6 bullets or 120 words, then call it once and let the approval card handle consent. Do not generate a long staged summary, separate proceed question, or repeated approval calls in the same run. If the user gives an event name but no folder link or Event ID, pass that visible eventName and let the tool find the unique existing pack or fail safely if ambiguous.",
+    "Fast-path approval-gated Google Workspace update for existing event-pack corrections. Patch only the supplied changed fields in an existing generated pack without creating a new pack, reclassifying the event, recomputing deadlines, or regenerating unchanged documents. Use immediately for corrections like changed date/time, venue, attendance, organiser details, first-aid plan, form-field answers, or explicit replacement deadline rows. For a multi-day or rescheduled-range event, set changes.proposedDate to the first day and changes.proposedEndDate to the last day (YYYY-MM-DD). Leave packVersion unset to patch the existing pack version; the tool fails and asks for packVersion only if several versions exist. This tool does not recompute deadlines: if a date move shifts the timeline, recompute them with compute_deadlines and pass changes.deadlines. Before this tool, emit only a short proposal, max 3 bullets or 60 words, then call it once and let the approval card handle consent. Do not call classify_event, collect_missing_event_fields, compute_deadlines, prepare_event_identity, or generate_event_pack before this tool unless the user explicitly asked for that extra work. If the user gives an event name but no folder link or Event ID, pass that visible eventName and let the tool find the unique existing pack or fail safely if ambiguous.",
   inputSchema: Input,
   needsApproval: always(),
   async execute(input) {
@@ -620,6 +790,23 @@ export default defineTool({
     ) {
       throw new Error(
         "changes.proposedDate must be a real ISO calendar date in YYYY-MM-DD format. Ask the user to clarify impossible dates before updating the pack.",
+      );
+    }
+    if (
+      input.changes.proposedEndDate?.trim() &&
+      !isIsoCalendarDate(input.changes.proposedEndDate)
+    ) {
+      throw new Error(
+        "changes.proposedEndDate must be a real ISO calendar date in YYYY-MM-DD format. Ask the user to clarify impossible dates before updating the pack.",
+      );
+    }
+    if (
+      input.changes.proposedDate?.trim() &&
+      input.changes.proposedEndDate?.trim() &&
+      input.changes.proposedEndDate.trim() < input.changes.proposedDate.trim()
+    ) {
+      throw new Error(
+        "changes.proposedEndDate must be on or after changes.proposedDate for a date range.",
       );
     }
 
@@ -642,42 +829,62 @@ export default defineTool({
       );
     }
 
+    const warnings: string[] = [];
+    const resolvedPackVersion = choosePackVersion(
+      input.packVersion,
+      await listPackVersions({ drive, folderId: folder.folder.id, eventId }),
+    );
+
     const eventName =
       input.changes.eventName ??
       input.eventName ??
       eventPackFolderDisplayEventName(folder.folder.name ?? "Event");
     const changedFields = changedFieldNames(input.changes);
-    const warnings: string[] = [];
     const files = {
       riskAssessment: await findEventPackFile({
         drive,
         folderId: folder.folder.id,
         eventId,
-        packVersion: input.packVersion,
+        packVersion: resolvedPackVersion,
         documentType: "risk-assessment",
       }),
       fieldPack: await findEventPackFile({
         drive,
         folderId: folder.folder.id,
         eventId,
-        packVersion: input.packVersion,
+        packVersion: resolvedPackVersion,
         documentType: "field-pack-sheet",
       }),
       deadlinePlan: await findEventPackFile({
         drive,
         folderId: folder.folder.id,
         eventId,
-        packVersion: input.packVersion,
+        packVersion: resolvedPackVersion,
         documentType: "deadline-plan-sheet",
       }),
       internalReviewSummary: await findEventPackFile({
         drive,
         folderId: folder.folder.id,
         eventId,
-        packVersion: input.packVersion,
+        packVersion: resolvedPackVersion,
         documentType: "internal-review-summary",
       }),
     };
+
+    const anyPackFileFound = Boolean(
+      files.riskAssessment ||
+        files.fieldPack ||
+        files.deadlinePlan ||
+        files.internalReviewSummary,
+    );
+    if (!anyPackFileFound) {
+      // The folder matched but no pack documents exist at this version. Fail
+      // loudly instead of silently patching only the tracker (which would
+      // leave the tracker and the pack documents inconsistent).
+      throw new Error(
+        `Found the pack folder "${folder.folder.name ?? eventId}" but no pack documents for ${eventId} at v${resolvedPackVersion}. Confirm the pack version (or omit packVersion to use the latest) before updating; nothing was written.`,
+      );
+    }
 
     let dateTimeAnswer: string | undefined;
     if (files.fieldPack?.mimeType === GOOGLE_SHEET_MIME_TYPE) {
@@ -750,7 +957,7 @@ export default defineTool({
       warnings.push("Form field pack sheet was not found, so form fields were not patched.");
     }
 
-    if (input.changes.deadlines !== undefined) {
+    if (hasReplacementDeadlines(input.changes)) {
       if (files.deadlinePlan) {
         if (files.deadlinePlan.mimeType !== GOOGLE_SHEET_MIME_TYPE) {
           throw new Error("Existing deadline plan is not a native Google Sheet.");
@@ -778,11 +985,19 @@ export default defineTool({
         fileId: files.internalReviewSummary.id,
         driveClient: drive,
       });
+      const correctionLines = correctionValueLines({
+        changes: input.changes,
+        dateTimeAnswer,
+      });
+      const correctionsBlock =
+        correctionLines.length > 0
+          ? `\nCorrections in this update:\n${correctionLines.join("\n")}`
+          : "";
       const appended = `${currentText.trimEnd()}\n\nUpdate Log\n- ${updateLogText({
         changedFields,
         reason: input.updateReason,
         generatedBy: input.generatedBy,
-      })}\n`;
+      })}${correctionsBlock}\n`;
       updates.internalReviewSummary = await updateGoogleDocText({
         documentId: files.internalReviewSummary.id,
         text: appended,
@@ -805,7 +1020,7 @@ export default defineTool({
             patch: trackerPatch,
           });
         }
-        if (input.changes.deadlines !== undefined) {
+        if (hasReplacementDeadlines(input.changes)) {
           updates.complianceTasks = await upsertTrackerRows({
             tabName: "Compliance Tasks",
             keyColumn: "Task ID",
@@ -834,10 +1049,16 @@ export default defineTool({
       );
     }
 
+    if (changesRequireDeadlineRecompute(input.changes)) {
+      warnings.push(
+        "Event date changed but the deadline plan and Compliance Tasks were not recomputed. If the timeline shifted, run compute_deadlines and pass changes.deadlines (or regenerate the deadline plan).",
+      );
+    }
+
     return {
       eventId,
-      packId: `${eventId}-PACK-v${input.packVersion}`,
-      packVersion: input.packVersion,
+      packId: `${eventId}-PACK-v${resolvedPackVersion}`,
+      packVersion: resolvedPackVersion,
       folder,
       changedFields,
       files,

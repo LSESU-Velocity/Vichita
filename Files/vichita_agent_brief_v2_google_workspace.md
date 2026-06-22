@@ -10,6 +10,7 @@
 **Primary channel integration:** Slack through Vercel Connect  
 **MVP posture:** Reactive only; no proactive monitoring; no template version monitor  
 **Last source review:** 2026-06-21
+**Last implementation status update:** 2026-06-22
 
 ---
 
@@ -35,7 +36,7 @@ Humans must review and submit everything. The agent must not sign contracts, sub
 
 ### 0.1 Current implementation status
 
-As of 2026-06-21, the project has a working Slack deployment and the core event-pack workflow is live-tested.
+As of 2026-06-22, the project has a working Slack deployment, the core event-pack workflow is live-tested, and the two live follow-up bugs have code fixes in the working tree pending production smoke after deploy.
 
 Complete:
 
@@ -72,12 +73,14 @@ Complete:
   - Live Slack test confirmed fast, accurate pack generation after the short pre-approval fix.
 - Date validation now rejects impossible calendar dates such as February 30 before identity/deadline/Drive writes.
 - Diagnostics hooks and Google-write breadcrumbs exist to identify future timeout locations.
+- Slack modal submission false-failure UX is fixed in code by wrapping the Eve Slack route in-process: `view_submission` keeps Eve answer recording but returns Slack's expected empty `200`; approval button actions stay on Eve's default path.
+- Route classification now trusts the model's structured trip flags (`tripBeyondM25`, `overnightTrip`, `multiDayAtSingleVenue`) instead of re-parsing prose with broad regexes. The deterministic backstop only demotes the common over-flag of an on-site multi-day overnight event with no away travel or external venue.
 
 Partially complete:
 
-- Event classification and deadline behaviour works through Slack, but formal eval coverage and Slack modals are not complete.
+- Event classification and deadline behaviour works through Slack. Helper regression tests cover the reported single-venue hackathon bug, real away/overnight trips, on-site overnight events, and external-university attendance; a separate formal eval harness is still optional/future work.
 - Source/rule versioning is represented in env/config and tracker tooling, but current source rows still need manual verification and entry.
-- Live follow-up bugs to fix next: Slack modal answer submission can show "failed, try again" even though the value is accepted, and a hackathon at one venue was misclassified as a UK trip.
+- Slack modal and classifier fixes need production smoke after deployment on the real production URL.
 
 Not complete yet:
 
@@ -1170,10 +1173,11 @@ Complete:
 - Patch existing same-version packs in place with `update_event_pack_fields` for changed event details.
 - Keep pre-approval Slack output short to avoid repeated approval-card generation before Eve checkpointing.
 
-Known next fixes:
+Post-deploy smoke checks:
 
-- Slack modal answer submission can display "failed, try again" while still accepting the submitted value.
-- Hackathon-at-one-venue prompts can be misclassified as UK trips; trip classification needs a stricter "actual travel away from venue / beyond M25 / overnight accommodation" trigger.
+- Submit a Slack modal answer on the real production URL and confirm Slack does not show "failed, try again" and the answer still reaches Eve.
+- Click a Google-write approval card and confirm approval-gated writes still use Eve's default block-action handling.
+- Test representative classifier prompts: reported single-venue hackathon => large event, explicit away/overnight travel => trips process, external universities attending => not a trip.
 
 ### Phase 5 - Marketing operations row
 
@@ -1199,7 +1203,7 @@ Status: planned, not started.
 
 ### Phase 7 - Tests, evals, demo
 
-Status: helper tests, Phase 2 live Google smoke, and Phase 4 live event-pack smoke complete; formal evals still pending.
+Status: helper tests, route-classifier regression coverage, Phase 2 live Google smoke, and Phase 4 live event-pack smoke complete; formal evals remain optional/future work.
 
 - Typecheck.
 - Unit tests.
@@ -1550,9 +1554,8 @@ Done:
 
 Still required for the first full event-pack acceptance gate:
 
-1. Event intake modal.
-2. Formal exactly-75 and route-classification tests/evals.
+1. Production smoke for Slack modal answer submission on the real production URL.
+2. Production smoke for representative route-classification prompts and approval cards after deployment.
 3. Source Registry rows and current source verification for production pack reliance.
-4. Fix live modal answer submission UX: submitted name/email is accepted, but Slack/Eve shows "failed, try again".
-5. Fix live route bug: a hackathon at one venue was classified as a UK trip despite no travel/trip wording.
-6. Marketing ops calendar row with launch gates.
+4. Optional formal route-classification eval harness beyond the helper regression tests.
+5. Marketing ops calendar row with launch gates.

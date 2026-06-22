@@ -69,6 +69,19 @@ import {
   sortDocsRequestsDescending,
   type IndexedDocsRequest,
 } from "../agent/lib/googleWorkspace/riskAssessmentDoc.ts";
+import {
+  eventPackUpdateFastPathContext,
+  matchesEventPackUpdateFastPath,
+} from "../agent/lib/eventPackFastPath.ts";
+import {
+  changedFieldNames,
+  changesRequireDeadlineRecompute,
+  choosePackVersion,
+  dateTimeAnswerFromChanges,
+  eventDateLabelFromChanges,
+  listPackVersions,
+  parseDateTimeAnswer,
+} from "../agent/tools/update_event_pack_fields.ts";
 
 function fakeTextCell(
   text: string,
@@ -1631,4 +1644,211 @@ test("classifier keeps an on-site overnight at a single venue out of the trips p
 
   assert.equal(residentialStyle.route, "large_event");
   assert.equal(onSiteOvernight.route, "large_event");
+});
+
+test("fast path matches real pack corrections and ignores status reads", () => {
+  const triggers = [
+    "@vichita the velocity build night 2027 event is now happening from march 1st to 2nd, and it will be at lse old building 4.01 instead. update the pack and all relevant files with this info",
+    "update the pack: the venue is now SAW 4.01",
+    "move build night to march 2nd",
+    "the hackathon is now in room 4.01",
+    "set the date to 2027-03-01",
+    "attendance should be 150 now",
+    "reschedule the demo to friday and fix the files",
+    // Supported status fields must still fast-path (not caught by the
+    // event-status bail).
+    "update the ticketing status to sold out",
+    "update the academic chair status to confirmed",
+  ];
+  for (const message of triggers) {
+    assert.equal(matchesEventPackUpdateFastPath(message), true, message);
+    assert.match(
+      eventPackUpdateFastPathContext(message) ?? "",
+      /automated_routing_hint/,
+    );
+  }
+
+  const nonTriggers = [
+    "hey vichita, can you update me on the tracker?",
+    "any updates on the pack?",
+    "what's the status of build night?",
+    "thanks, that looks great",
+    "create a pack for our new workshop",
+    "can you book a room for tuesday?",
+    // Creation / scheduling must not be steered into the existing-pack flow.
+    "set up a pack for our new workshop",
+    "set up an event pack for build night",
+    "can you move my meeting to friday",
+    // Event-level status is not a field this tool patches.
+    "update the status of the event to confirmed",
+  ];
+  for (const message of nonTriggers) {
+    assert.equal(matchesEventPackUpdateFastPath(message), false, message);
+    assert.equal(eventPackUpdateFastPathContext(message), undefined);
+  }
+
+  // A create verb far from an unrelated "pack" must not bail a real correction.
+  assert.equal(
+    matchesEventPackUpdateFastPath(
+      "make the venue bigger and update the pack",
+    ),
+    true,
+  );
+});
+
+test("event pack date label captures multi-day ranges and preserves omitted parts", () => {
+  // Multi-day correction stores a real range.
+  assert.equal(
+    eventDateLabelFromChanges({
+      changes: { proposedDate: "2027-03-01", proposedEndDate: "2027-03-02" },
+      currentDate: undefined,
+    }),
+    "01-03-2027 to 02-03-2027",
+  );
+  // A new start date defaults to a single day even if the prior label was a
+  // range, so a moved start is never paired with a stale earlier end.
+  assert.equal(
+    eventDateLabelFromChanges({
+      changes: { proposedDate: "2027-04-05" },
+      currentDate: "01-03-2027 to 02-03-2027",
+    }),
+    "05-04-2027",
+  );
+  // A time-only change keeps the existing range.
+  assert.equal(
+    eventDateLabelFromChanges({
+      changes: { eventStartTime: "18:00" },
+      currentDate: "01-03-2027 to 02-03-2027",
+    }),
+    "01-03-2027 to 02-03-2027",
+  );
+  // Extending the end without moving the start keeps the start day.
+  assert.equal(
+    eventDateLabelFromChanges({
+      changes: { proposedEndDate: "2027-03-03" },
+      currentDate: "01-03-2027",
+    }),
+    "01-03-2027 to 03-03-2027",
+  );
+});
+
+test("date/time answer renders multi-day ranges and round-trips through the parser", () => {
+  const answer = dateTimeAnswerFromChanges({
+    changes: {
+      proposedDate: "2027-03-01",
+      proposedEndDate: "2027-03-02",
+      eventStartTime: "18:00",
+      eventEndTime: "22:00",
+    },
+  });
+  assert.equal(answer, "01-03-2027 to 02-03-2027, setup TBC, event 18:00-22:00");
+
+  const parsed = parseDateTimeAnswer(answer);
+  assert.equal(parsed?.date, "01-03-2027 to 02-03-2027");
+  assert.equal(parsed?.eventStartTime, "18:00");
+  assert.equal(parsed?.eventEndTime, "22:00");
+
+  // No date/time change means nothing to patch.
+  assert.equal(
+    dateTimeAnswerFromChanges({ changes: { eventName: "X" } }),
+    undefined,
+  );
+});
+
+test("date changes flag deadline recompute unless non-empty replacement deadlines are supplied", () => {
+  assert.equal(
+    changesRequireDeadlineRecompute({ proposedDate: "2027-03-01" }),
+    true,
+  );
+  assert.equal(
+    changesRequireDeadlineRecompute({ proposedEndDate: "2027-03-02" }),
+    true,
+  );
+  // An empty array is "no deadlines supplied" and must still flag recompute
+  // (it must never silently blank the deadline plan).
+  assert.equal(
+    changesRequireDeadlineRecompute({
+      proposedDate: "2027-03-01",
+      deadlines: [],
+    }),
+    true,
+  );
+  // Real replacement rows suppress the warning.
+  assert.equal(
+    changesRequireDeadlineRecompute({
+      proposedDate: "2027-03-01",
+      deadlines: [{ task: "Submit form", notes: [] }],
+    }),
+    false,
+  );
+  assert.equal(
+    changesRequireDeadlineRecompute({ preferredLocation: "Room 1" }),
+    false,
+  );
+});
+
+test("changedFieldNames ignores empty arrays so the update log stays accurate", () => {
+  assert.deepEqual(
+    changedFieldNames({ proposedDate: "2027-03-01", deadlines: [] }),
+    ["proposedDate"],
+  );
+  assert.deepEqual(
+    changedFieldNames({
+      preferredLocation: "Room 1",
+      deadlines: [{ task: "Submit form", notes: [] }],
+    }),
+    ["preferredLocation", "deadlines"],
+  );
+});
+
+test("listPackVersions returns distinct ascending versions in the folder", async () => {
+  const fakeDrive = {
+    files: {
+      list: async () => ({
+        data: {
+          files: [
+            { appProperties: { vichitaPackVersion: "2" } },
+            { appProperties: { vichitaPackVersion: "1" } },
+            { appProperties: { vichitaPackVersion: "2" } },
+            { appProperties: {} },
+          ],
+        },
+      }),
+    },
+  };
+  assert.deepEqual(
+    await listPackVersions({
+      drive: fakeDrive as never,
+      folderId: "folder",
+      eventId: "EVT-1",
+    }),
+    [1, 2],
+  );
+
+  const emptyDrive = {
+    files: { list: async () => ({ data: { files: [] } }) },
+  };
+  assert.deepEqual(
+    await listPackVersions({
+      drive: emptyDrive as never,
+      folderId: "folder",
+      eventId: "EVT-1",
+    }),
+    [],
+  );
+});
+
+test("choosePackVersion honours an explicit version and refuses to guess across multiple", () => {
+  // Explicit request always wins, even when others exist.
+  assert.equal(choosePackVersion(2, [1, 2, 3]), 2);
+  // Single existing version is used.
+  assert.equal(choosePackVersion(undefined, [2]), 2);
+  // No versioned files yet falls back to v1 (the no-files case is caught later).
+  assert.equal(choosePackVersion(undefined, []), 1);
+  // Several versions with no explicit choice must fail rather than edit the
+  // wrong (possibly archived) snapshot.
+  assert.throws(
+    () => choosePackVersion(undefined, [1, 2]),
+    /multiple versions/i,
+  );
 });

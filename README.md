@@ -21,12 +21,14 @@ Completed:
 - Phase 4 event-pack generation is implemented and live-tested: approval-gated pack generation creates/updates the risk assessment Google Doc, budget Google Sheet, LSESU form-field Google Sheet, deadline plan Google Sheet, internal review summary Google Doc, and tracker/compliance-task rows.
 - Same-version event-pack patching is implemented for corrections to existing packs, with lookup by visible event name, Event ID, folder link, or Slack thread context.
 - The pre-approval Slack step was shortened so Eve can checkpoint approval cards reliably before Vercel's 300-second Hobby runtime cap.
+- Slack modal submissions are handled through an in-process Eve Slack route wrapper that returns Slack's expected empty `200` for `view_submission` while preserving Eve's answer recording.
+- Route classification now uses the model's structured trip flags, with one deterministic correction for on-site multi-day/overnight events. Multi-day hackathons at one normal venue and external universities attending do not imply trips.
 
 In progress / next:
 
+- Production smoke after deploy for Slack modal submission UX, approval cards, and representative route-classification prompts.
 - Source Registry rows and current-year source verification before real pack reliance.
-- Event intake modal and formal classifier evals.
-- Fix two live follow-up bugs: Slack modal answer submission shows "failed, try again" even though the value is accepted, and hackathon-at-one-venue prompts can be misclassified as UK trips.
+- Formal classifier eval harness if the helper regression tests need to become a standalone eval suite.
 - Reminder tracker plus protected Vercel Cron route.
 
 Not started:

@@ -1,6 +1,6 @@
 # Vichita Manual Setup Checklist
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 Use this checklist for the full Vichita build, including MVP and later v2 modules.
 
@@ -23,20 +23,24 @@ Completed:
 - Phase 4 event-pack generation is implemented and live-tested: approval-gated generation creates/reuses the risk assessment Doc, budget Sheet, LSESU form-field Sheet, deadline plan Sheet, internal review summary Doc, Event Packs Index row, Events Tracker row, and Compliance Tasks rows.
 - Same-version pack updates are implemented through `update_event_pack_fields`, so corrections should patch existing packs rather than creating new ones.
 - Pre-approval Slack summaries have been shortened to avoid repeated approval-card generation before Eve checkpointing.
+- Slack modal answer submission UX has been fixed in code: `view_submission` requests still go through Eve answer recording, but the route wrapper returns Slack's expected empty `200` response.
+- Route classification has been simplified to trust structured `tripBeyondM25`, `overnightTrip`, and `multiDayAtSingleVenue` flags, with a deterministic demotion for on-site multi-day overnight events. Helper tests cover the reported single-venue hackathon case, real away trips, on-site overnight events, and external-university attendance.
 
 Partially complete:
 
 - Current-year large/flagship deadline env names exist, but values should stay blank until manually verified.
 - Source Registry rows still need approved source entries after manual verification.
-- Formal route/classifier eval coverage and Slack modal polish are still pending.
+- Formal route/classifier eval coverage is still pending beyond the helper regression suite.
+- Slack modal and classifier fixes need production smoke after deployment.
 
 Next manual/setup and implementation focus:
 
 - Add approved rows to the `Source Registry` after current LSESU source verification.
 - Verify current-year large/flagship deadline values before setting deadline env vars.
-- Fix live Slack modal answer submission UX: submitted name/email is accepted, but the modal reports "failed, try again".
-- Fix live route-classification bug: hackathons at a single venue must not be classified as UK trips unless the user actually describes travel beyond the normal venue context, beyond-M25 travel, overnight accommodation, or a trip process.
-- Add formal evals for event routes, including hackathon-at-one-venue versus actual trip examples.
+- Deploy the current fixes and smoke-test Slack modal submission on the real production URL, not a protected preview.
+- Smoke-test approval cards after deployment to confirm Google write approvals still use Eve's default button path.
+- Smoke-test representative classifier prompts: reported single-venue hackathon => large event, explicit away/overnight trip => trips process, external universities attending => not a trip.
+- Add formal evals for event routes if helper-test coverage is not enough for future changes.
 
 ## 1. Ownership decisions
 

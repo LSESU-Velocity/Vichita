@@ -1,7 +1,12 @@
 import { connectSlackCredentials } from "@vercel/connect/eve";
 import type { HttpRouteDefinition } from "eve/channels";
-import { slackChannel, type SlackChannelState } from "eve/channels/slack";
+import {
+  defaultSlackAuth,
+  slackChannel,
+  type SlackChannelState,
+} from "eve/channels/slack";
 
+import { eventPackUpdateFastPathContext } from "../lib/eventPackFastPath.js";
 import { isSlackViewSubmissionBody } from "../lib/slackProxy.js";
 
 const slack = slackChannel({
@@ -9,6 +14,22 @@ const slack = slackChannel({
   credentials: connectSlackCredentials(
     process.env.SLACK_CONNECTOR ?? "slack/vichita",
   ),
+  // Mirrors the Eve default (typing indicator + workspace-scoped auth) and
+  // adds the correction fast-path hint. Auth may be null; like the default, we
+  // still dispatch (we do not drop the turn) so behaviour matches the
+  // framework when an actor cannot be derived.
+  async onAppMention(ctx, message) {
+    await ctx.thread.startTyping("Thinking...");
+    const auth = defaultSlackAuth(message, ctx);
+    const fastPathContext = eventPackUpdateFastPathContext(message.markdown);
+    return fastPathContext ? { auth, context: [fastPathContext] } : { auth };
+  },
+  async onDirectMessage(ctx, message) {
+    await ctx.thread.startTyping("Thinking...");
+    const auth = defaultSlackAuth(message, ctx);
+    const fastPathContext = eventPackUpdateFastPathContext(message.markdown);
+    return fastPathContext ? { auth, context: [fastPathContext] } : { auth };
+  },
 });
 
 function replayRequestWithBody(req: Request, body: string) {
