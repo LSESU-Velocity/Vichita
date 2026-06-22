@@ -3,14 +3,22 @@ import { always } from "eve/tools/approval";
 import type { drive_v3, sheets_v4 } from "googleapis";
 import { z } from "zod";
 
-import { displayDateFromIsoDate, isIsoCalendarDate } from "../lib/dateLabels.js";
 import {
+  displayDateFromIsoDate,
+  isIsoCalendarDate,
+  splitDateRangeLabel,
+} from "../lib/dateLabels.js";
+import {
+  buildAccessibilityComplianceTaskRows,
   buildDeadlineComplianceTaskRows,
   buildDeadlinePlanSheet,
   buildRiskRows,
+  packDocumentFileName,
+  PACK_DOCUMENT_LABELS,
   type DeadlinePlanItem,
   type EventPackInput,
   type GeneratedSheet,
+  type PackDocumentType,
 } from "../lib/eventPack.js";
 import { createDriveClient, createSheetsClient } from "../lib/googleWorkspace/client.js";
 import {
@@ -20,6 +28,7 @@ import {
 import {
   eventPackFolderDisplayEventName,
   findEventPackFolderForUpdate,
+  renameDriveFile,
 } from "../lib/googleWorkspace/drive.js";
 import {
   patchTrackerRow,
@@ -79,6 +88,15 @@ const Changes = z.object({
   sponsorInvolved: z.boolean().optional(),
   sponsorName: z.string().optional(),
   estimatedCost: z.number().nonnegative().optional(),
+  transportPlan: z.string().optional(),
+  accommodationPlan: z.string().optional(),
+  onSiteOvernightStay: z
+    .boolean()
+    .optional()
+    .describe(
+      "Participants stay overnight at the event's own venue. Adding this needs a pack regenerate to insert the on-site overnight risk row; update patches existing rows only.",
+    ),
+  multiDayAtSingleVenue: z.boolean().optional(),
   deadlines: z.array(DeadlinePlanItemInput).optional(),
 });
 
@@ -189,14 +207,6 @@ export function parseDateTimeAnswer(value: string | undefined) {
     eventStartTime: match[3].trim(),
     eventEndTime: match[4].trim(),
   };
-}
-
-function splitDateRangeLabel(label: string | undefined) {
-  const trimmed = label?.trim();
-  if (!trimmed) return { start: undefined, end: undefined } as const;
-  const match = /^(.*\S)\s+to\s+(\S.*)$/.exec(trimmed);
-  if (match) return { start: match[1].trim(), end: match[2].trim() } as const;
-  return { start: trimmed, end: undefined } as const;
 }
 
 // Resolves the human-facing event date label, supporting multi-day ranges.
@@ -365,7 +375,7 @@ export async function listPackVersions({
 
 // Chooses which pack version to patch. An explicit request always wins.
 // Otherwise patch the single existing version; refuse to guess when several
-// versions exist (the highest is not necessarily the active one — it may be an
+// versions exist (the highest is not necessarily the active one - it may be an
 // archive snapshot), and fall back to v1 when the folder has no versioned
 // files yet (the no-files case is then caught downstream).
 export function choosePackVersion(
@@ -528,7 +538,7 @@ async function fillGeneratedSheetBasic({
   return { rows: Math.max(sheet.values.length - 1, 0) };
 }
 
-function formFieldUpdatesFromChanges({
+export function formFieldUpdatesFromChanges({
   changes,
   dateTimeAnswer,
 }: {
@@ -567,6 +577,8 @@ function formFieldUpdatesFromChanges({
   add("Attendee registration / entry plan", changes.attendeeRegistrationEntryPlan);
   add("Academic Chair status", changes.academicChairStatus);
   add("Academic Chair full name and email, if confirmed", changes.academicChairNameEmail);
+  add("Transport plan", changes.transportPlan);
+  add("Accommodation plan, if relevant", changes.accommodationPlan);
   add("External organisation involved?", yesNo(changes.externalOrganisationInvolved));
   add("Organisation name", changes.externalOrganisationName);
   add(
@@ -672,13 +684,15 @@ function riskGeneratedCellUpdatesFromChanges({
 function trackerPatchFromChanges({
   changes,
   dateTimeAnswer,
+  dateLabel,
 }: {
   changes: z.infer<typeof Changes>;
   dateTimeAnswer?: string;
+  dateLabel?: string;
 }) {
   const patch: Record<string, string | number | boolean | undefined> = {
     "Event Name": changes.eventName,
-    Date: changes.proposedDate ? displayDate(changes.proposedDate) : undefined,
+    Date: dateLabel,
     Time: dateTimeAnswer,
     Owner: changes.organiserName,
     "Expected Attendance": changes.expectedAttendance,
@@ -763,6 +777,8 @@ function correctionValueLines({
   add("Ticketing", changes.ticketingPlan);
   add("Registration / entry", changes.attendeeRegistrationEntryPlan);
   add("Academic chair status", changes.academicChairStatus);
+  add("Transport plan", changes.transportPlan);
+  add("Accommodation plan", changes.accommodationPlan);
   add("External organisation involved", yesNo(changes.externalOrganisationInvolved));
   add("External organisation name", changes.externalOrganisationName);
   add("Sponsor involved", yesNo(changes.sponsorInvolved));
@@ -776,6 +792,339 @@ function correctionValueLines({
   }
 
   return lines;
+}
+
+// Current human-facing values read from the existing Form Fields sheet. Used to
+// build a merged "current state + supplied changes" view so derived free-text is
+// refreshed rather than left stale.
+type PackFieldState = {
+  dateTimeAnswer?: string;
+  location?: string;
+  overview?: string;
+  classificationReason?: string;
+  eventName?: string;
+};
+
+function readFormFieldState(values: unknown[][]): PackFieldState {
+  const get = (field: string) => currentAnswerForField(values, field);
+  return {
+    dateTimeAnswer: get("Date and time of activity, including setup time"),
+    location: get("Preferred event location"),
+    overview: get("Overview of the event"),
+    classificationReason: get("Classification reason"),
+    eventName: get("What is the name of your event?"),
+  };
+}
+
+export type StaleReplacement = { from: string; to: string };
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function parseDisplayDate(value: string | undefined) {
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value?.trim() ?? "");
+  if (!match) return undefined;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  return { day, month, year, monthName: MONTH_NAMES[month - 1], display: match[0] };
+}
+
+function ordinalDay(day: number) {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${day}th`;
+  return `${day}${["th", "st", "nd", "rd"][day % 10] ?? "th"}`;
+}
+
+type ParsedDisplayDate = NonNullable<ReturnType<typeof parseDisplayDate>>;
+
+function singleDayVariants(date: ParsedDisplayDate) {
+  return [
+    date.display, // 14-03-2027
+    `${date.day} ${date.monthName} ${date.year}`, // 14 March 2027
+    `${ordinalDay(date.day)} ${date.monthName} ${date.year}`, // 14th March 2027
+    `${date.monthName} ${date.day} ${date.year}`, // March 14 2027
+    `${date.monthName} ${date.day}, ${date.year}`, // March 14, 2027
+    `${date.day} ${date.monthName}`, // 14 March
+    `${ordinalDay(date.day)} ${date.monthName}`, // 14th March
+    `${date.monthName} ${date.day}`, // March 14
+    `${date.monthName} ${ordinalDay(date.day)}`, // March 14th
+  ];
+}
+
+// Plausible natural-language renderings of the OLD event date(s), most specific
+// first, so a date written as prose ("14-15 March 2027", "14 March") is refreshed
+// rather than only the numeric DD-MM-YYYY form. Every variant carries a month
+// name or the full numeric date, so bare day numbers are never matched. The
+// longest forms are returned first so a range form is replaced before its
+// individual-day sub-forms.
+export function oldDateReferenceVariants(
+  startDisplay?: string,
+  endDisplay?: string,
+): string[] {
+  const start = parseDisplayDate(startDisplay);
+  if (!start) return [];
+  const end = endDisplay ? parseDisplayDate(endDisplay) : undefined;
+  const variants = new Set<string>();
+
+  const isRange =
+    end &&
+    (end.day !== start.day ||
+      end.month !== start.month ||
+      end.year !== start.year);
+
+  if (isRange && end) {
+    // The exact numeric range label used by the date/time field and the internal
+    // review "Date:" line, replaced as one unit before its day sub-forms.
+    variants.add(`${start.display} to ${end.display}`);
+    if (start.month === end.month && start.year === end.year) {
+      // Day-first ranges: "14-15 March 2027", "14 to 15 March", etc.
+      variants.add(`${start.day}-${end.day} ${start.monthName} ${start.year}`);
+      variants.add(`${start.day} to ${end.day} ${start.monthName} ${start.year}`);
+      variants.add(`${ordinalDay(start.day)}-${ordinalDay(end.day)} ${start.monthName} ${start.year}`);
+      variants.add(`${ordinalDay(start.day)} to ${ordinalDay(end.day)} ${start.monthName} ${start.year}`);
+      variants.add(`${start.day} ${start.monthName} ${start.year} to ${end.day} ${start.monthName} ${end.year}`);
+      variants.add(`${start.day}-${end.day} ${start.monthName}`);
+      variants.add(`${start.day} to ${end.day} ${start.monthName}`);
+      variants.add(`${ordinalDay(start.day)}-${ordinalDay(end.day)} ${start.monthName}`);
+      variants.add(`${ordinalDay(start.day)} to ${ordinalDay(end.day)} ${start.monthName}`);
+      variants.add(`${start.day} ${start.monthName} to ${end.day} ${start.monthName}`);
+      // Month-first ranges: "March 14-15", "March 14 to 15", "March 14 to 15th".
+      variants.add(`${start.monthName} ${start.day}-${end.day} ${start.year}`);
+      variants.add(`${start.monthName} ${start.day} to ${end.day} ${start.year}`);
+      variants.add(`${start.monthName} ${start.day} to ${end.day}, ${start.year}`);
+      variants.add(`${start.monthName} ${ordinalDay(start.day)} to ${ordinalDay(end.day)} ${start.year}`);
+      variants.add(`${start.monthName} ${start.day}-${end.day}`);
+      variants.add(`${start.monthName} ${start.day} to ${end.day}`);
+      variants.add(`${start.monthName} ${start.day} to ${ordinalDay(end.day)}`);
+      variants.add(`${start.monthName} ${ordinalDay(start.day)} to ${ordinalDay(end.day)}`);
+    } else {
+      // Cross-month ranges, day-first and month-first.
+      variants.add(`${start.day} ${start.monthName} ${start.year} to ${end.day} ${end.monthName} ${end.year}`);
+      variants.add(`${start.day} ${start.monthName} to ${end.day} ${end.monthName} ${end.year}`);
+      variants.add(`${start.day} ${start.monthName} to ${end.day} ${end.monthName}`);
+      variants.add(`${start.day} ${start.monthName} - ${end.day} ${end.monthName} ${end.year}`);
+      variants.add(`${start.monthName} ${start.day} to ${end.monthName} ${end.day} ${end.year}`);
+      variants.add(`${start.monthName} ${start.day} to ${end.monthName} ${end.day}`);
+    }
+    for (const variant of singleDayVariants(end)) variants.add(variant);
+  }
+
+  for (const variant of singleDayVariants(start)) variants.add(variant);
+
+  return [...variants].sort((left, right) => right.length - left.length);
+}
+
+// Old -> new substring replacements for the changed date/location, so derived
+// free-text (overview, classification reason, internal review body) stops
+// showing stale values. `from` must be specific enough not to over-match a
+// short generic word, so very short or "TBC" current values are skipped. The
+// date side covers numeric and natural-language prose forms of the old date.
+export function buildStaleReplacements({
+  changes,
+  currentState,
+  newDateLabel,
+}: {
+  changes: z.infer<typeof Changes>;
+  currentState: PackFieldState;
+  newDateLabel?: string;
+}): StaleReplacement[] {
+  const replacements: StaleReplacement[] = [];
+
+  if (changes.preferredLocation !== undefined) {
+    const from = currentState.location?.trim();
+    const to = changes.preferredLocation.trim();
+    if (from && from.length >= 4 && from.toLowerCase() !== "tbc" && from !== to) {
+      replacements.push({ from, to });
+    }
+  }
+
+  if (newDateLabel) {
+    const current = splitDateRangeLabel(
+      parseDateTimeAnswer(currentState.dateTimeAnswer)?.date,
+    );
+    for (const variant of oldDateReferenceVariants(current.start, current.end)) {
+      if (variant.length >= 4 && variant !== newDateLabel) {
+        replacements.push({ from: variant, to: newDateLabel });
+      }
+    }
+  }
+
+  return replacements;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function applyStaleReplacements(
+  text: string,
+  replacements: StaleReplacement[],
+) {
+  let output = text;
+  for (const { from, to } of replacements) {
+    if (!from || from === to) continue;
+    // Case-insensitive so Slack-style prose (e.g. a lowercase month "march") is
+    // refreshed too. The new value is supplied via a function so a "$" inside it
+    // is never treated as a regex replacement back-reference.
+    output = output.replace(new RegExp(escapeRegExp(from), "gi"), () => to);
+  }
+  return output;
+}
+
+// Refreshes derived free-text form fields (overview, classification reason) when
+// a date/location change left a stale reference. Overview is only rewritten when
+// the user did not supply a fresh description; the route is never changed by this
+// tool, so a stale date/location reference in the reason can always be refreshed.
+function staleFormFieldUpdates({
+  changes,
+  currentState,
+  replacements,
+}: {
+  changes: z.infer<typeof Changes>;
+  currentState: PackFieldState;
+  replacements: StaleReplacement[];
+}): SheetPatch[] {
+  const updates: SheetPatch[] = [];
+  if (replacements.length === 0) return updates;
+
+  if (changes.eventDescription === undefined && currentState.overview) {
+    const replaced = applyStaleReplacements(currentState.overview, replacements);
+    if (replaced !== currentState.overview) {
+      updates.push({ field: "Overview of the event", answer: replaced });
+    }
+  }
+
+  if (currentState.classificationReason) {
+    const replaced = applyStaleReplacements(
+      currentState.classificationReason,
+      replacements,
+    );
+    if (replaced !== currentState.classificationReason) {
+      updates.push({ field: "Classification reason", answer: replaced });
+    }
+  }
+
+  return updates;
+}
+
+function currentFolderDatePrefix(folderName: string | undefined) {
+  const match = /^(\d{2}-\d{2}-\d{4})\s+-\s+/.exec(folderName?.trim() ?? "");
+  return match?.[1];
+}
+
+// New visible base name for the pack folder/files. Keeps the existing start-date
+// prefix when only the event name changes, or applies the new start date when
+// the event moves.
+export function renamedPackBaseName({
+  folderName,
+  newEventName,
+  newStartIsoDate,
+}: {
+  folderName: string | undefined;
+  newEventName: string;
+  newStartIsoDate?: string;
+}) {
+  const safeName =
+    newEventName
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Event";
+  const datePrefix = newStartIsoDate
+    ? displayDateFromIsoDate(newStartIsoDate) ?? currentFolderDatePrefix(folderName)
+    : currentFolderDatePrefix(folderName);
+
+  return datePrefix ? `${datePrefix} - ${safeName}` : safeName;
+}
+
+// Renames the pack folder and every generated file at this version so visible
+// titles track the new date/name. Drive IDs, parents, appProperties, and the
+// Event ID are preserved (rename only changes the title).
+async function renamePackFolderAndFiles({
+  drive,
+  folderId,
+  folderName,
+  eventId,
+  packVersion,
+  newEventName,
+  newStartIsoDate,
+}: {
+  drive: drive_v3.Drive;
+  folderId: string;
+  folderName: string | undefined;
+  eventId: string;
+  packVersion: number;
+  newEventName: string;
+  newStartIsoDate?: string;
+}) {
+  const baseName = renamedPackBaseName({
+    folderName,
+    newEventName,
+    newStartIsoDate,
+  });
+  const renamed: Array<{ id: string; name: string; documentType: string }> = [];
+
+  if ((folderName ?? "").trim() !== baseName) {
+    const folderResult = await renameDriveFile({
+      fileId: folderId,
+      name: baseName,
+      client: drive,
+    });
+    renamed.push({
+      id: folderResult.id,
+      name: folderResult.name,
+      documentType: "folder",
+    });
+  }
+
+  const response = await drive.files.list({
+    q: [
+      "trashed = false",
+      `'${escapeDriveQueryValue(folderId)}' in parents`,
+      `appProperties has { key='vichitaEventId' and value='${escapeDriveQueryValue(eventId)}' }`,
+      `appProperties has { key='vichitaPackVersion' and value='${packVersion}' }`,
+    ].join(" and "),
+    fields: "files(id,name,appProperties)",
+    spaces: "drive",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const files = (response.data.files ?? []) as ExistingFile[];
+
+  for (const file of files) {
+    if (!file.id) continue;
+    const rawType = file.appProperties?.vichitaDocumentType;
+    if (!rawType || !(rawType in PACK_DOCUMENT_LABELS)) continue;
+
+    const desiredName = packDocumentFileName({
+      baseName,
+      documentType: rawType as PackDocumentType,
+      packVersion,
+    });
+    if ((file.name ?? "").trim() === desiredName) continue;
+
+    const result = await renameDriveFile({
+      fileId: file.id,
+      name: desiredName,
+      client: drive,
+    });
+    renamed.push({ id: result.id, name: result.name, documentType: rawType });
+  }
+
+  return { baseName, renamed };
 }
 
 export default defineTool({
@@ -886,28 +1235,45 @@ export default defineTool({
       );
     }
 
-    let dateTimeAnswer: string | undefined;
+    // Build a merged "current pack state + supplied changes" snapshot from the
+    // existing Form Fields sheet so derived text is refreshed, not just direct
+    // fields patched.
+    let currentState: PackFieldState = {};
+    let formSheetAvailable = false;
     if (files.fieldPack?.mimeType === GOOGLE_SHEET_MIME_TYPE) {
+      formSheetAvailable = true;
       const formValues = await readSheetValues({
         sheets,
         spreadsheetId: files.fieldPack.id,
         sheetTitle: "Form Fields",
       });
-      dateTimeAnswer = dateTimeAnswerFromChanges({
-        changes: input.changes,
-        currentAnswer: currentAnswerForField(
-          formValues,
-          "Date and time of activity, including setup time",
-        ),
-      });
-    } else {
-      dateTimeAnswer = dateTimeAnswerFromChanges({ changes: input.changes });
-      if (dateTimeAnswer) {
-        warnings.push(
-          "Date/time update could not preserve omitted previous date/time parts because the form field sheet was not found.",
-        );
-      }
+      currentState = readFormFieldState(formValues);
     }
+
+    const dateTimeAnswer = dateTimeAnswerFromChanges({
+      changes: input.changes,
+      currentAnswer: currentState.dateTimeAnswer,
+    });
+    if (dateTimeAnswer && !formSheetAvailable) {
+      warnings.push(
+        "Date/time update could not preserve omitted previous date/time parts because the form field sheet was not found.",
+      );
+    }
+
+    const dateChanged =
+      input.changes.proposedDate !== undefined ||
+      input.changes.proposedEndDate !== undefined;
+    const newDateLabel = dateChanged
+      ? eventDateLabelFromChanges({
+          changes: input.changes,
+          currentDate: parseDateTimeAnswer(currentState.dateTimeAnswer)?.date,
+        })
+      : undefined;
+    const staleReplacements = buildStaleReplacements({
+      changes: input.changes,
+      currentState,
+      newDateLabel,
+    });
 
     const updates: Record<string, unknown> = {};
 
@@ -940,10 +1306,17 @@ export default defineTool({
       warnings.push("Risk assessment file was not found, so risk fields were not patched.");
     }
 
-    const formUpdates = formFieldUpdatesFromChanges({
-      changes: input.changes,
-      dateTimeAnswer,
-    });
+    const formUpdates = [
+      ...formFieldUpdatesFromChanges({
+        changes: input.changes,
+        dateTimeAnswer,
+      }),
+      ...staleFormFieldUpdates({
+        changes: input.changes,
+        currentState,
+        replacements: staleReplacements,
+      }),
+    ];
     if (files.fieldPack) {
       if (files.fieldPack.mimeType !== GOOGLE_SHEET_MIME_TYPE) {
         throw new Error("Existing form field pack is not a native Google Sheet.");
@@ -985,6 +1358,10 @@ export default defineTool({
         fileId: files.internalReviewSummary.id,
         driveClient: drive,
       });
+      // Refresh stale date/location references in the existing body before
+      // appending the log, so the main content is not left pointing at the old
+      // date or venue.
+      const refreshedText = applyStaleReplacements(currentText, staleReplacements);
       const correctionLines = correctionValueLines({
         changes: input.changes,
         dateTimeAnswer,
@@ -993,7 +1370,7 @@ export default defineTool({
         correctionLines.length > 0
           ? `\nCorrections in this update:\n${correctionLines.join("\n")}`
           : "";
-      const appended = `${currentText.trimEnd()}\n\nUpdate Log\n- ${updateLogText({
+      const appended = `${refreshedText.trimEnd()}\n\nUpdate Log\n- ${updateLogText({
         changedFields,
         reason: input.updateReason,
         generatedBy: input.generatedBy,
@@ -1010,6 +1387,7 @@ export default defineTool({
       const trackerPatch = trackerPatchFromChanges({
         changes: input.changes,
         dateTimeAnswer,
+        dateLabel: newDateLabel,
       });
       try {
         if (Object.keys(trackerPatch).length > 0) {
@@ -1041,6 +1419,39 @@ export default defineTool({
           }`,
         );
       }
+
+      // Refresh the accessibility venue note when the location changes. Patch
+      // only the Notes cell of the venue-access task so existing due dates and
+      // other accessibility rows are preserved.
+      if (input.changes.preferredLocation !== undefined) {
+        try {
+          const venueRow = buildAccessibilityComplianceTaskRows({
+            eventId,
+            eventName,
+            organiserName: input.changes.organiserName,
+            preferredLocation: input.changes.preferredLocation,
+            foodOrRefreshments: input.changes.foodOrRefreshments,
+            ticketingPlan: input.changes.ticketingPlan,
+            accessibilityContactOrRequestRoute:
+              input.changes.accessibilityContactOrRequestRoute,
+          }).find((row) => String(row["Task ID"]).endsWith("venue-access"));
+
+          if (venueRow) {
+            updates.accessibilityVenueNote = await patchTrackerRow({
+              tabName: "Compliance Tasks",
+              keyColumn: "Task ID",
+              keyValue: String(venueRow["Task ID"]),
+              patch: { Notes: venueRow.Notes },
+            });
+          }
+        } catch (error) {
+          warnings.push(
+            `Accessibility venue note update failed: ${
+              error instanceof Error ? error.message : "unknown error"
+            }`,
+          );
+        }
+      }
     }
 
     if (input.changes.estimatedCost !== undefined) {
@@ -1049,10 +1460,47 @@ export default defineTool({
       );
     }
 
+    if (
+      input.changes.transportPlan !== undefined ||
+      input.changes.accommodationPlan !== undefined ||
+      input.changes.onSiteOvernightStay !== undefined
+    ) {
+      warnings.push(
+        "Trip/overnight details changed. If this introduces a risk category the existing risk assessment does not already cover (coach transport, overnight accommodation, on-site overnight welfare), regenerate the pack with generate_event_pack (updateExistingDrafts=true) and the full structured inputs to add those rows; this tool patches existing risk rows in place and does not add new ones.",
+      );
+    }
+
     if (changesRequireDeadlineRecompute(input.changes)) {
       warnings.push(
         "Event date changed but the deadline plan and Compliance Tasks were not recomputed. If the timeline shifted, run compute_deadlines and pass changes.deadlines (or regenerate the deadline plan).",
       );
+    }
+
+    // Rename the folder and generated files so visible titles track the new
+    // date/name. Drive IDs, appProperties, and the Event ID are preserved.
+    if (
+      input.changes.eventName !== undefined ||
+      input.changes.proposedDate !== undefined
+    ) {
+      try {
+        const rename = await renamePackFolderAndFiles({
+          drive,
+          folderId: folder.folder.id,
+          folderName: folder.folder.name ?? undefined,
+          eventId,
+          packVersion: resolvedPackVersion,
+          newEventName: eventName,
+          newStartIsoDate: input.changes.proposedDate,
+        });
+        updates.rename = rename;
+        folder.folder.name = rename.baseName;
+      } catch (error) {
+        warnings.push(
+          `Pack folder/file rename failed (content patches still applied): ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
     }
 
     return {

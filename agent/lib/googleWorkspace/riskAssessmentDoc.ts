@@ -78,6 +78,11 @@ const RISK_DETECTION_INPUT: EventPackInput = {
   externalOrganisationInvolved: true,
   under18sOrVulnerableAdults: true,
   externalVenue: true,
+  tripBeyondM25: true,
+  overnightTrip: true,
+  transportPlan: "Coach transport",
+  accommodationPlan: "Hostel accommodation",
+  onSiteOvernightStay: true,
 };
 type DocumentBody = {
   content: docs_v1.Schema$StructuralElement[];
@@ -653,6 +658,28 @@ export function buildRiskTableFillRequests(
   return buildRiskTableFillRequestsForMatch(match, rows, marker);
 }
 
+// The generated core + activity rows (and the tab they live in), in document
+// order. Used to bound an in-place cell update so a worked-example or guidance
+// row elsewhere in the template is never patched instead of the real risk row.
+function scopedGeneratedRows(
+  sections: NonNullable<ReturnType<typeof findGeneratedRiskSections>>,
+) {
+  const rows = sections.core.tableRows; // core and activity share one table
+  const startIndex = sections.core.rowIndex;
+  const endIndex = sections.activity.rowIndex + sections.activity.currentRowCount;
+  const scoped: Array<{ row: docs_v1.Schema$TableRow; tabId?: string }> = [];
+
+  for (
+    let index = startIndex;
+    index < endIndex && index < rows.length;
+    index += 1
+  ) {
+    scoped.push({ row: rows[index], tabId: sections.core.tabId });
+  }
+
+  return scoped;
+}
+
 export function buildGeneratedRiskCellUpdateRequests(
   document: docs_v1.Schema$Document,
   updates: RiskGeneratedCellUpdate[],
@@ -660,30 +687,43 @@ export function buildGeneratedRiskCellUpdateRequests(
   const indexedRequests: IndexedDocsRequest[] = [];
   const updatedCells = new Set<string>();
 
-  for (const body of documentBodies(document)) {
-    for (const element of body.content) {
-      const table = element.table;
-      if (!table) continue;
+  const considerRow = (
+    row: docs_v1.Schema$TableRow,
+    tabId: string | undefined,
+  ) => {
+    const cells = row.tableCells ?? [];
+    if (cells.length < RISK_COLUMN_COUNT) return;
+    const hazardText = firstCellText(row);
 
-      for (const row of table.tableRows ?? []) {
-        const cells = row.tableCells ?? [];
-        if (cells.length < RISK_COLUMN_COUNT) continue;
-        const hazardText = firstCellText(row);
+    for (const update of updates) {
+      const updateKey = `${update.hazardIdentified}:${update.column}`;
+      if (updatedCells.has(updateKey)) continue;
+      if (!textIncludesNormalized(hazardText, update.hazardIdentified)) continue;
 
-        for (const update of updates) {
-          const updateKey = `${update.hazardIdentified}:${update.column}`;
-          if (updatedCells.has(updateKey)) continue;
-          if (!textIncludesNormalized(hazardText, update.hazardIdentified)) continue;
+      indexedRequests.push(
+        ...buildReplaceCellTextRequests(
+          cells[RISK_TABLE_COLUMN_INDEX[update.column]],
+          update.text,
+          tabId,
+        ),
+      );
+      updatedCells.add(updateKey);
+    }
+  };
 
-          indexedRequests.push(
-            ...buildReplaceCellTextRequests(
-              cells[RISK_TABLE_COLUMN_INDEX[update.column]],
-              update.text,
-              body.tabId,
-            ),
-          );
-          updatedCells.add(updateKey);
-        }
+  // Prefer the bounded generated section; fall back to a full scan only when the
+  // generated rows cannot be located (the missingCells result then flags it).
+  const sections = findGeneratedRiskSections(document);
+  if (sections) {
+    for (const { row, tabId } of scopedGeneratedRows(sections)) {
+      considerRow(row, tabId);
+    }
+  } else {
+    for (const body of documentBodies(document)) {
+      for (const element of body.content) {
+        const table = element.table;
+        if (!table) continue;
+        for (const row of table.tableRows ?? []) considerRow(row, body.tabId);
       }
     }
   }

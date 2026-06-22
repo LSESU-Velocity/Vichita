@@ -41,13 +41,19 @@ import { getTrackerTabDefinition } from "../agent/lib/googleWorkspace/trackerSch
 import {
   budgetRequirement,
   buildAccessibilityComplianceTaskRows,
+  buildBudgetQuantityNumberFormatRequests,
   buildBudgetSheetUpdates,
   buildDeadlineComplianceTaskRows,
+  buildDeadlinePlanBody,
   buildDeadlinePlanSheet,
+  buildEventTrackerRow,
   buildFormFieldPackBody,
   buildFormFieldPackSheet,
   buildInternalReviewSummaryBody,
   buildRiskAssessmentScalarReplacements,
+  buildRiskRows,
+  effectiveMissingCriticalFields,
+  packDocumentFileName,
   plainGoogleDocText,
   type EventPackInput,
 } from "../agent/lib/eventPack.ts";
@@ -74,13 +80,18 @@ import {
   matchesEventPackUpdateFastPath,
 } from "../agent/lib/eventPackFastPath.ts";
 import {
+  applyStaleReplacements,
+  buildStaleReplacements,
   changedFieldNames,
   changesRequireDeadlineRecompute,
   choosePackVersion,
   dateTimeAnswerFromChanges,
   eventDateLabelFromChanges,
+  formFieldUpdatesFromChanges,
   listPackVersions,
+  oldDateReferenceVariants,
   parseDateTimeAnswer,
+  renamedPackBaseName,
 } from "../agent/tools/update_event_pack_fields.ts";
 
 function fakeTextCell(
@@ -1851,4 +1862,444 @@ test("choosePackVersion honours an explicit version and refuses to guess across 
     () => choosePackVersion(undefined, [1, 2]),
     /multiple versions/i,
   );
+});
+
+test("multi-day events render a date range across generated artifacts", () => {
+  const input: EventPackInput = {
+    eventId: "EVT-20270301-velocity-build-night-a1b2c3d4",
+    eventName: "Velocity Build Night",
+    proposedDate: "2027-03-01",
+    proposedEndDate: "2027-03-02",
+    preferredLocation: "LSE Old Building 4.01",
+  };
+
+  // Risk assessment header date/time field.
+  assert.equal(
+    buildRiskAssessmentScalarReplacements(input)["{{event_dates_times}}"],
+    "01-03-2027 to 02-03-2027, setup TBC, event TBC-TBC",
+  );
+
+  // Form field pack date/time row.
+  const dateRow = buildFormFieldPackSheet(input).values.find(
+    (row) => row[1] === "Date and time of activity, including setup time",
+  );
+  assert.match(String(dateRow?.[2]), /01-03-2027 to 02-03-2027/);
+
+  // Events tracker Date + Time columns.
+  const trackerRow = buildEventTrackerRow(input, {});
+  assert.equal(trackerRow.Date, "01-03-2027 to 02-03-2027");
+  assert.match(String(trackerRow.Time), /01-03-2027 to 02-03-2027/);
+
+  // Deadline plan body event-date line.
+  assert.match(
+    buildDeadlinePlanBody(input),
+    /Event date: 01-03-2027 to 02-03-2027/,
+  );
+
+  // A single-day event still renders one date with no "to".
+  assert.equal(
+    buildRiskAssessmentScalarReplacements({
+      ...input,
+      proposedEndDate: undefined,
+    })["{{event_dates_times}}"],
+    "01-03-2027, setup TBC, event TBC-TBC",
+  );
+});
+
+test("form field pack keeps supplied overview and classification content with the date range", () => {
+  const cellOf = (field: string) =>
+    buildFormFieldPackSheet({
+      eventId: "EVT-20270301-velocity-build-night-a1b2c3d4",
+      eventName: "Velocity Build Night",
+      proposedDate: "2027-03-01",
+      proposedEndDate: "2027-03-02",
+      classificationRoute: "large_event",
+      classificationReason: "Attendance over 75 at LSE Generate Hub.",
+      eventDescription: "Overnight buildathon at LSE Generate Hub.",
+    }).values.find((row) => row[1] === field)?.[2];
+
+  assert.match(
+    String(cellOf("Date and time of activity, including setup time")),
+    /01-03-2027 to 02-03-2027/,
+  );
+  assert.equal(cellOf("Classification reason"), "Attendance over 75 at LSE Generate Hub.");
+  assert.equal(cellOf("Overview of the event"), "Overnight buildathon at LSE Generate Hub.");
+});
+
+test("internal review summary shows the date range and the merged location", () => {
+  const body = buildInternalReviewSummaryBody({
+    eventId: "EVT-20270301-velocity-build-night-a1b2c3d4",
+    eventName: "Velocity Build Night",
+    proposedDate: "2027-03-01",
+    proposedEndDate: "2027-03-02",
+    preferredLocation: "LSE Old Building 4.01",
+  });
+
+  assert.match(body, /Date: 01-03-2027 to 02-03-2027/);
+  assert.match(body, /Location: LSE Old Building 4\.01/);
+});
+
+test("accessibility venue task note reflects the current location", () => {
+  const venue = buildAccessibilityComplianceTaskRows({
+    eventId: "EVT-20270301-velocity-build-night-a1b2c3d4",
+    eventName: "Velocity Build Night",
+    preferredLocation: "LSE Old Building 4.01",
+  }).find((row) => String(row["Task ID"]).endsWith("venue-access"));
+
+  assert.match(String(venue?.Notes), /LSE Old Building 4\.01/);
+});
+
+test("missing critical fields surface TBCs instead of None recorded", () => {
+  const input: EventPackInput = {
+    eventId: "EVT-20270301-velocity-build-night-a1b2c3d4",
+    eventName: "Velocity Build Night",
+    proposedDate: "2027-03-01",
+    proposedEndDate: "2027-03-02",
+    preferredLocation: "LSE Generate Hub",
+    expectedAttendance: 90,
+    missingCriticalFields: ["Sponsor agreement"],
+  };
+  const missing = effectiveMissingCriticalFields(input);
+
+  // Model-supplied entry is preserved and deterministically derived TBCs are added.
+  assert.ok(missing.includes("Sponsor agreement"));
+  assert.ok(missing.includes("Event start/end time"));
+  assert.ok(missing.includes("First-aid plan"));
+  assert.ok(missing.includes("Event lead contact number"));
+
+  const summary = buildInternalReviewSummaryBody(input);
+  assert.match(summary, /- First-aid plan/);
+  assert.doesNotMatch(summary, /Missing Critical Fields\s+- None recorded/);
+
+  // A fully populated event derives no missing fields.
+  assert.deepEqual(
+    effectiveMissingCriticalFields({
+      ...input,
+      missingCriticalFields: [],
+      eventStartTime: "18:00",
+      eventEndTime: "22:00",
+      firstAidPlan: "Named first aider plus LSE Security route.",
+      organiserName: "Velocity President",
+      organiserLseEmail: "velocity@lse.ac.uk",
+      organiserContactNumber: "07000000000",
+    }),
+    [],
+  );
+});
+
+test("trip and on-site overnight inputs add the expected activity risk rows", () => {
+  const tripHazards = buildRiskRows({
+    eventId: "EVT-20260418-cambridge-society-trip-c0ffee01",
+    eventName: "Cambridge Society Trip",
+    tripBeyondM25: true,
+    overnightTrip: true,
+    transportPlan: "Return coach from campus.",
+    accommodationPlan: "Shared hostel rooms.",
+  }).activityRisks.map((row) => row.hazardIdentified);
+  assert.ok(tripHazards.includes("Coach Transport and Travel Delays"));
+  assert.ok(tripHazards.includes("Overnight Accommodation, Rooming and Welfare"));
+
+  const buildathonHazards = buildRiskRows({
+    eventId: "EVT-20270314-velocity-build-night-a1b2c3d4",
+    eventName: "Velocity Build Night",
+    onSiteOvernightStay: true,
+    multiDayAtSingleVenue: true,
+  }).activityRisks.map((row) => row.hazardIdentified);
+  assert.ok(buildathonHazards.includes("On-site Overnight Stay and Welfare"));
+
+  // A plain on-site event triggers none of the trip/overnight rows.
+  const plainHazards = buildRiskRows({
+    eventId: "EVT-20261104-ai-startup-sprint-c91d0000",
+    eventName: "AI Startup Sprint",
+    expectedAttendance: 60,
+  }).activityRisks.map((row) => row.hazardIdentified);
+  assert.ok(!plainHazards.includes("Coach Transport and Travel Delays"));
+  assert.ok(!plainHazards.includes("On-site Overnight Stay and Welfare"));
+
+  // The new hazards must be detectable so in-place updates can find their rows.
+  const detectable = generatedRiskHazardsForDetection().activity;
+  assert.ok(detectable.includes("Coach Transport and Travel Delays"));
+  assert.ok(detectable.includes("Overnight Accommodation, Rooming and Welfare"));
+  assert.ok(detectable.includes("On-site Overnight Stay and Welfare"));
+});
+
+test("budget quantity columns are reset to a plain number format", () => {
+  const requests = buildBudgetQuantityNumberFormatRequests(7);
+
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.repeatCell?.range?.sheetId, 7);
+    assert.equal(request.repeatCell?.range?.startColumnIndex, 3);
+    assert.equal(request.repeatCell?.range?.endColumnIndex, 4);
+    assert.equal(
+      request.repeatCell?.cell?.userEnteredFormat?.numberFormat?.type,
+      "NUMBER",
+    );
+  }
+  // Expense quantity D7:D16 and income quantity D20:D26.
+  assert.deepEqual(
+    requests.map((request) => [
+      request.repeatCell?.range?.startRowIndex,
+      request.repeatCell?.range?.endRowIndex,
+    ]),
+    [
+      [6, 16],
+      [19, 26],
+    ],
+  );
+});
+
+test("generated pack file names share the rename base name", () => {
+  assert.equal(
+    packDocumentFileName({
+      baseName: "01-03-2027 - Velocity Build Night",
+      documentType: "risk-assessment",
+      packVersion: 1,
+    }),
+    "01-03-2027 - Velocity Build Night - Risk Assessment v1",
+  );
+});
+
+test("update merge refreshes stale date and location text, including prose dates", () => {
+  const replacements = buildStaleReplacements({
+    changes: {
+      preferredLocation: "LSE Old Building 4.01",
+      proposedDate: "2027-03-01",
+      proposedEndDate: "2027-03-02",
+    },
+    currentState: {
+      location: "LSE Generate Hub",
+      dateTimeAnswer: "14-03-2027 to 15-03-2027, setup TBC, event TBC-TBC",
+    },
+    newDateLabel: "01-03-2027 to 02-03-2027",
+  });
+
+  // Location is the first replacement; the date side expands to numeric and prose forms.
+  assert.deepEqual(replacements[0], {
+    from: "LSE Generate Hub",
+    to: "LSE Old Building 4.01",
+  });
+  const froms = replacements.map((replacement) => replacement.from);
+  assert.ok(froms.includes("14-03-2027 to 15-03-2027"));
+  assert.ok(froms.includes("14-15 March 2027"));
+  assert.ok(
+    replacements.every(
+      (replacement) =>
+        replacement.to === "01-03-2027 to 02-03-2027" ||
+        replacement.to === "LSE Old Building 4.01",
+    ),
+  );
+
+  // Numeric range label, compact prose range, and a single prose date are all refreshed.
+  assert.equal(
+    applyStaleReplacements(
+      "Hackathon at LSE Generate Hub on 14-03-2027 to 15-03-2027.",
+      replacements,
+    ),
+    "Hackathon at LSE Old Building 4.01 on 01-03-2027 to 02-03-2027.",
+  );
+  assert.equal(
+    applyStaleReplacements("Buildathon on 14-15 March 2027 at the hub.", replacements),
+    "Buildathon on 01-03-2027 to 02-03-2027 at the hub.",
+  );
+  assert.equal(
+    applyStaleReplacements(
+      "Classification: large event scheduled 14 March 2027.",
+      replacements,
+    ),
+    "Classification: large event scheduled 01-03-2027 to 02-03-2027.",
+  );
+
+  // The original Slack-style month-first range is replaced as one unit, and
+  // matching is case-insensitive so a lowercase month is refreshed too.
+  assert.equal(
+    applyStaleReplacements("Event on March 14 to 15th.", replacements),
+    "Event on 01-03-2027 to 02-03-2027.",
+  );
+  assert.equal(
+    applyStaleReplacements("event on march 14 to 15th at the hub.", replacements),
+    "event on 01-03-2027 to 02-03-2027 at the hub.",
+  );
+  assert.equal(
+    applyStaleReplacements("Buildathon March 14-15 in the hub.", replacements),
+    "Buildathon 01-03-2027 to 02-03-2027 in the hub.",
+  );
+
+  // A short or TBC current value is never used as a replacement source.
+  assert.deepEqual(
+    buildStaleReplacements({
+      changes: { preferredLocation: "Room 1" },
+      currentState: { location: "TBC" },
+    }),
+    [],
+  );
+});
+
+test("old date reference variants cover numeric, compact, and spelled-out prose, longest first", () => {
+  const variants = oldDateReferenceVariants("14-03-2027", "15-03-2027");
+
+  assert.ok(variants.includes("14-03-2027 to 15-03-2027"));
+  assert.ok(variants.includes("14-15 March 2027"));
+  assert.ok(variants.includes("14-15 March"));
+  assert.ok(variants.includes("14 March 2027"));
+  assert.ok(variants.includes("15 March 2027"));
+  assert.ok(variants.includes("14th-15th March 2027"));
+  // Month-first ranges (the original Slack form).
+  assert.ok(variants.includes("March 14 to 15th"));
+  assert.ok(variants.includes("March 14 to 15"));
+  assert.ok(variants.includes("March 14-15"));
+
+  // Longest first so a range form is replaced before its day sub-forms.
+  for (let index = 1; index < variants.length; index += 1) {
+    assert.ok(variants[index - 1].length >= variants[index].length);
+  }
+
+  // A single-day event still produces specific forms but no range form.
+  const single = oldDateReferenceVariants("14-03-2027");
+  assert.ok(single.includes("14-03-2027"));
+  assert.ok(single.includes("14 March 2027"));
+  assert.ok(!single.some((variant) => variant.includes(" to ")));
+});
+
+test("a trip with no cost records a budget blocker as a missing field", () => {
+  const missing = effectiveMissingCriticalFields({
+    eventId: "EVT-20270414-cambridge-society-trip-c0ffee01",
+    eventName: "Cambridge Society Trip",
+    proposedDate: "2027-04-14",
+    proposedEndDate: "2027-04-18",
+    expectedAttendance: 25,
+    classificationRoute: "trip_process",
+    organiserName: "Event Lead",
+    organiserLseEmail: "lead@lse.ac.uk",
+    organiserContactNumber: "07000000000",
+    preferredLocation: "Cambridge",
+    eventStartTime: "09:00",
+    eventEndTime: "17:00",
+    firstAidPlan: "Trip first-aid kit and named lead.",
+    tripBeyondM25: true,
+    overnightTrip: true,
+    transportPlan: "Return coach.",
+    accommodationPlan: "Hostel.",
+  });
+  assert.deepEqual(missing, ["Trip cost / budget estimate"]);
+
+  // A known cost clears the budget blocker.
+  assert.ok(
+    !effectiveMissingCriticalFields({
+      eventId: "EVT-20270414-cambridge-society-trip-c0ffee01",
+      eventName: "Cambridge Society Trip",
+      classificationRoute: "trip_process",
+      tripBeyondM25: true,
+      transportPlan: "Return coach.",
+      estimatedCost: 1200,
+    }).includes("Trip cost / budget estimate"),
+  );
+});
+
+test("update form field patches include trip transport and accommodation rows", () => {
+  const fields = formFieldUpdatesFromChanges({
+    changes: { transportPlan: "Return coach there and back.", accommodationPlan: "Shared hostel." },
+  }).map((update) => update.field);
+
+  assert.ok(fields.includes("Transport plan"));
+  assert.ok(fields.includes("Accommodation plan, if relevant"));
+});
+
+test("renamed pack base name keeps the date prefix on a rename and moves it on a date change", () => {
+  assert.equal(
+    renamedPackBaseName({
+      folderName: "14-03-2027 - Velocity Build Night",
+      newEventName: "Velocity Build Night 2027",
+    }),
+    "14-03-2027 - Velocity Build Night 2027",
+  );
+  assert.equal(
+    renamedPackBaseName({
+      folderName: "14-03-2027 - Velocity Build Night",
+      newEventName: "Velocity Build Night",
+      newStartIsoDate: "2027-03-01",
+    }),
+    "01-03-2027 - Velocity Build Night",
+  );
+});
+
+test("location risk update targets the generated Crowd Control row, not an example row", () => {
+  const input: EventPackInput = {
+    eventId: "EVT-20270301-velocity-build-night-a1b2c3d4",
+    eventName: "Velocity Build Night",
+    expectedAttendance: 90,
+    preferredLocation: "LSE Old Building 4.01",
+  };
+  const generated = riskRowsForDocument(input);
+
+  // A worked-example row that also says "Crowd Control" sits ABOVE the generated
+  // section with low document indices.
+  const exampleRow = fakeRiskDataRow(
+    [
+      "Crowd Control",
+      "example why",
+      "example who",
+      "9",
+      "EXAMPLE flow for Old Example Hall",
+      "during",
+      "owner",
+    ],
+    30,
+  );
+  let cursor = 2000;
+  const nextRow = (values: string[]) => {
+    const row = fakeRiskDataRow(values, cursor);
+    cursor += 760;
+    return row;
+  };
+  const headerRow = nextRow([
+    "Hazard Identified",
+    "Why",
+    "Who",
+    "Score",
+    "Before",
+    "During",
+    "Owner",
+  ]);
+  const coreRows = generated.coreRisks.map((row) => nextRow(riskRowToTableCells(row)));
+  const activityHeader = nextRow(["Activity-Related Risks"]);
+  const activityRows = generated.activityRisks.map((row) =>
+    nextRow(riskRowToTableCells(row)),
+  );
+  const document: docs_v1.Schema$Document = {
+    body: {
+      content: [
+        {
+          startIndex: 20,
+          endIndex: 100000,
+          table: {
+            tableRows: [
+              exampleRow,
+              headerRow,
+              ...coreRows,
+              activityHeader,
+              ...activityRows,
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  const plan = buildGeneratedRiskCellUpdateRequests(document, [
+    {
+      hazardIdentified: "Crowd Control",
+      column: "actions_before_event",
+      text: "NEW flow for LSE Old Building 4.01",
+    },
+  ]);
+
+  assert.deepEqual(plan.updatedCells, ["Crowd Control:actions_before_event"]);
+  assert.deepEqual(plan.missingCells, []);
+
+  const insert = plan.requests.find((request) => request.insertText);
+  assert.equal(insert?.insertText?.text, "NEW flow for LSE Old Building 4.01");
+  // The targeted index is in the generated section (>= 2000), not the example
+  // row near index 400.
+  assert.ok((insert?.insertText?.location?.index ?? 0) > 1000);
 });

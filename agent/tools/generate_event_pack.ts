@@ -7,6 +7,7 @@ import { buildPackId, parseEventId } from "../lib/eventIdentity.js";
 import { isIsoCalendarDate } from "../lib/dateLabels.js";
 import {
   buildAccessibilityComplianceTaskRows,
+  buildBudgetQuantityNumberFormatRequests,
   buildBudgetSheetUpdates,
   buildDeadlineComplianceTaskRows,
   buildDeadlinePlanSheet,
@@ -15,6 +16,8 @@ import {
   buildInternalReviewSummaryBody,
   buildPackIndexRow,
   buildRiskAssessmentScalarReplacements,
+  effectiveMissingCriticalFields,
+  packDocumentFileName,
   plainGoogleDocText,
   budgetRequirement,
   documentBaseName,
@@ -103,6 +106,12 @@ const Input = z.object({
   eventName: z.string().min(1),
   eventDescription: z.string().optional(),
   proposedDate: z.string().optional(),
+  proposedEndDate: z
+    .string()
+    .optional()
+    .describe(
+      "Last day for a multi-day event (YYYY-MM-DD). Omit for a single-day event; must be on or after proposedDate.",
+    ),
   setupStartTime: z.string().optional(),
   eventStartTime: z.string().optional(),
   eventEndTime: z.string().optional(),
@@ -134,6 +143,18 @@ const Input = z.object({
   filmScreening: z.boolean().optional(),
   tripBeyondM25: z.boolean().optional(),
   overnightTrip: z.boolean().optional(),
+  multiDayAtSingleVenue: z
+    .boolean()
+    .optional()
+    .describe(
+      "True when the event spans multiple days at one on-site venue (not a trip).",
+    ),
+  onSiteOvernightStay: z
+    .boolean()
+    .optional()
+    .describe(
+      "True when participants stay overnight at the event's own venue (e.g. a hackathon where people sleep on-site). Adds an on-site overnight welfare risk; not a trip.",
+    ),
   externalVenue: z.boolean().optional(),
   classificationRoute: Route.optional(),
   classificationReason: z.string().optional(),
@@ -629,6 +650,41 @@ async function fillBudgetSheet(spreadsheetId: string, input: z.infer<typeof Inpu
       },
     });
   }
+
+  const warnings: string[] = [];
+
+  // Reset the quantity columns to a plain integer number format so quantities
+  // (e.g. 80 tickets) do not inherit the price columns' currency formatting.
+  try {
+    const metadata = await sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: "sheets(properties(sheetId,title))",
+    });
+    const budgetSheetId = metadata.data.sheets
+      ?.map((sheet) => sheet.properties)
+      .find((properties) => properties?.title === "Budget Template")?.sheetId;
+
+    if (typeof budgetSheetId === "number") {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: buildBudgetQuantityNumberFormatRequests(budgetSheetId),
+        },
+      });
+    } else {
+      warnings.push(
+        "Budget quantity columns could not be reset to plain numbers because the 'Budget Template' tab was not found; quantity cells may display with currency formatting.",
+      );
+    }
+  } catch (error) {
+    warnings.push(
+      `Budget quantity columns could not be reformatted to plain numbers (${
+        error instanceof Error ? error.name : "unknown error"
+      }); confirm the quantity cells display as numbers, not currency.`,
+    );
+  }
+
+  return { warnings };
 }
 
 type PackTraceLogger = (
@@ -694,6 +750,20 @@ export default defineTool({
         "proposedDate must be a real ISO calendar date in YYYY-MM-DD format. Ask the user to clarify impossible dates before generating a pack.",
       );
     }
+    if (input.proposedEndDate?.trim() && !isIsoCalendarDate(input.proposedEndDate)) {
+      throw new Error(
+        "proposedEndDate must be a real ISO calendar date in YYYY-MM-DD format. Ask the user to clarify impossible dates before generating a pack.",
+      );
+    }
+    if (
+      input.proposedDate?.trim() &&
+      input.proposedEndDate?.trim() &&
+      input.proposedEndDate.trim() < input.proposedDate.trim()
+    ) {
+      throw new Error(
+        "proposedEndDate must be on or after proposedDate for a multi-day event.",
+      );
+    }
 
     const config = readGoogleWorkspaceConfig();
     if (!config.riskAssessmentTemplateFileId) {
@@ -712,6 +782,7 @@ export default defineTool({
     const baseName = documentBaseName(input);
     const budgetDecision = budgetRequirement(input, input.includeBudget);
     const reusedFiles: string[] = [];
+    const warnings: string[] = [];
 
     if (budgetDecision.shouldGenerateBudget && !config.budgetTemplateFileId) {
       throw new Error(
@@ -749,7 +820,11 @@ export default defineTool({
         copyDriveFileToFolderOrReuse({
           sourceFileId: riskAssessmentTemplateFileId,
           parentFolderId: folderId,
-          name: `${baseName} - Risk Assessment v${input.packVersion}`,
+          name: packDocumentFileName({
+            baseName,
+            documentType: "risk-assessment",
+            packVersion: input.packVersion,
+          }),
           documentType: "risk-assessment",
           reusedFiles,
           updateExistingDrafts: input.updateExistingDrafts,
@@ -818,7 +893,11 @@ export default defineTool({
         copyDriveFileToFolderOrReuse({
           sourceFileId: config.budgetTemplateFileId!,
           parentFolderId: folderId,
-          name: `${baseName} - Budget v${input.packVersion}`,
+          name: packDocumentFileName({
+            baseName,
+            documentType: "budget",
+            packVersion: input.packVersion,
+          }),
           documentType: "budget",
           reusedFiles,
           updateExistingDrafts: input.updateExistingDrafts,
@@ -837,9 +916,12 @@ export default defineTool({
         );
       }
 
-      await tracePackOperation(traceGoogleWrite, "budget.fillSheet", () =>
-        fillBudgetSheet(budget!.id, input),
+      const budgetFill = await tracePackOperation(
+        traceGoogleWrite,
+        "budget.fillSheet",
+        () => fillBudgetSheet(budget!.id, input),
       );
+      warnings.push(...budgetFill.warnings);
     }
 
     const firstLinks: EventPackFileLinks = {
@@ -854,7 +936,11 @@ export default defineTool({
       () =>
         createGoogleSheetOrReuse({
           parentFolderId: folderId,
-          name: `${baseName} - Deadline Plan v${input.packVersion}`,
+          name: packDocumentFileName({
+            baseName,
+            documentType: "deadline-plan-sheet",
+            packVersion: input.packVersion,
+          }),
           documentType: "deadline-plan-sheet",
           reusedFiles,
           updateExistingDrafts: input.updateExistingDrafts,
@@ -888,7 +974,11 @@ export default defineTool({
       () =>
         createGoogleSheetOrReuse({
           parentFolderId: folderId,
-          name: `${baseName} - LSESU Form Field Pack v${input.packVersion}`,
+          name: packDocumentFileName({
+            baseName,
+            documentType: "field-pack-sheet",
+            packVersion: input.packVersion,
+          }),
           documentType: "field-pack-sheet",
           reusedFiles,
           updateExistingDrafts: input.updateExistingDrafts,
@@ -911,7 +1001,11 @@ export default defineTool({
       () =>
         createGoogleDocWithTextOrReuse({
           parentFolderId: folderId,
-          name: `${baseName} - Internal Review Summary v${input.packVersion}`,
+          name: packDocumentFileName({
+            baseName,
+            documentType: "internal-review-summary",
+            packVersion: input.packVersion,
+          }),
           text: buildInternalReviewSummaryBody(input, summaryLinks, budgetDecision),
           documentType: "internal-review-summary",
           reusedFiles,
@@ -970,6 +1064,36 @@ export default defineTool({
         ),
       );
     }
+    // Honest deadline reporting: when no computed deadlines were supplied the
+    // deadline plan / Compliance Tasks only carry a placeholder row, so the
+    // model must not tell the committee the deadlines are real.
+    const deadlinePlanStatus =
+      input.deadlines.length > 0
+        ? `Computed deadline plan written with ${input.deadlines.length} item(s).`
+        : "Deadline placeholder only: no computed deadlines were supplied, so the deadline plan and Compliance Tasks hold a single 'run compute_deadlines' row, not real dates.";
+    if (input.deadlines.length === 0) {
+      warnings.push(
+        "Deadline plan is a placeholder only. No computed deadlines were supplied, so do not tell the committee the deadlines are computed. Run compute_deadlines and update the pack to populate real dates.",
+      );
+    }
+
+    // A trip with transport/accommodation but no budget and no cost: surface the
+    // gap instead of silently shipping a pack with no budget.
+    const looksLikeTrip = Boolean(
+      input.classificationRoute === "trip_process" ||
+        input.tripBeyondM25 ||
+        input.overnightTrip ||
+        input.transportPlan?.trim() ||
+        input.accommodationPlan?.trim(),
+    );
+    if (!budget && looksLikeTrip && typeof input.estimatedCost !== "number") {
+      warnings.push(
+        "No budget was generated and no cost was supplied for a trip with transport/accommodation. Treat cost/budget as a blocker, or offer to generate a budget sheet without inventing amounts.",
+      );
+    }
+
+    const missingCriticalFields = effectiveMissingCriticalFields(input);
+
     return {
       eventId: input.eventId,
       packId,
@@ -987,12 +1111,15 @@ export default defineTool({
       riskAssessmentHeaderUpdate,
       riskAssessmentTextQa,
       deadlineTasks: { rows: deadlineTaskRows.length },
+      deadlinePlanStatus,
       accessibilityTasks: {
         status: accessibilityTasksStatus,
         rows: accessibilityTaskRows.length,
       },
+      missingCriticalFields,
       reusedFiles,
       trackerUpdates,
+      warnings,
       disclaimer:
         "Draft aid only. LSESU's current published guidance and the live form/template are authoritative. This was generated for internal Velocity review and must be checked before submission.",
     };
@@ -1018,9 +1145,12 @@ export default defineTool({
         riskAssessmentHeaderUpdate: output.riskAssessmentHeaderUpdate,
         riskAssessmentTextQa: output.riskAssessmentTextQa,
         deadlineTasks: output.deadlineTasks,
+        deadlinePlanStatus: output.deadlinePlanStatus,
         accessibilityTasks: output.accessibilityTasks,
+        missingCriticalFields: output.missingCriticalFields,
         reusedFiles: output.reusedFiles,
         trackerUpdates: output.trackerUpdates,
+        warnings: output.warnings,
         disclaimer: output.disclaimer,
       },
     };

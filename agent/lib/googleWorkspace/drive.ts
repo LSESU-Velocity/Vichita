@@ -298,6 +298,29 @@ export async function getDriveFolderById({
   return file;
 }
 
+// Renames a Drive file or folder in place. The file ID, parents, appProperties,
+// and contents are untouched, so Event ID / pack metadata and downstream links
+// stay stable while the visible title changes.
+export async function renameDriveFile({
+  fileId,
+  name,
+  client,
+}: {
+  fileId: string;
+  name: string;
+  client?: drive_v3.Drive;
+}) {
+  const drive = getDriveClient(client);
+  const response = await drive.files.update({
+    fileId,
+    fields: "id,name",
+    supportsAllDrives: true,
+    requestBody: { name },
+  });
+
+  return { id: response.data.id ?? fileId, name: response.data.name ?? name };
+}
+
 export async function findEventPackFolderForUpdate({
   eventId,
   eventName,

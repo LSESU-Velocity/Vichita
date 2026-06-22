@@ -63,3 +63,34 @@ export function dateDisplaySortKey(value: string | undefined) {
 
   return `${match[3]}-${match[2]}-${match[1]}`;
 }
+
+// Single source of truth for the human-facing event date label. Renders a single
+// day ("DD-MM-YYYY") or an inclusive range ("DD-MM-YYYY to DD-MM-YYYY") from ISO
+// start/end dates. Returns undefined when the start is missing/unparseable so
+// callers can fall back to their own placeholder text.
+export function eventDateRangeLabel({
+  startIsoDate,
+  endIsoDate,
+}: {
+  startIsoDate?: string;
+  endIsoDate?: string;
+}) {
+  const start = displayDateFromIsoDate(startIsoDate);
+  if (!start) return undefined;
+
+  const end = displayDateFromIsoDate(endIsoDate);
+  return end && end !== start ? `${start} to ${end}` : start;
+}
+
+// Splits an already-formatted display label ("DD-MM-YYYY" or "DD-MM-YYYY to
+// DD-MM-YYYY") back into its start/end parts. Used when merging an existing
+// human-facing label with a new ISO start/end during in-place updates.
+export function splitDateRangeLabel(label: string | undefined) {
+  const trimmed = label?.trim();
+  if (!trimmed) return { start: undefined, end: undefined } as const;
+
+  const match = /^(.*\S)\s+to\s+(\S.*)$/.exec(trimmed);
+  if (match) return { start: match[1].trim(), end: match[2].trim() } as const;
+
+  return { start: trimmed, end: undefined } as const;
+}

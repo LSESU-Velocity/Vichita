@@ -1,5 +1,7 @@
+import type { sheets_v4 } from "googleapis";
+
 import { buildPackId } from "./eventIdentity.js";
-import { displayDateFromIsoDate } from "./dateLabels.js";
+import { displayDateFromIsoDate, eventDateRangeLabel } from "./dateLabels.js";
 
 export type EventRoute =
   | "regular_event_candidate"
@@ -56,6 +58,7 @@ export type EventPackInput = {
   eventName: string;
   eventDescription?: string;
   proposedDate?: string;
+  proposedEndDate?: string;
   setupStartTime?: string;
   eventStartTime?: string;
   eventEndTime?: string;
@@ -87,6 +90,8 @@ export type EventPackInput = {
   filmScreening?: boolean;
   tripBeyondM25?: boolean;
   overnightTrip?: boolean;
+  multiDayAtSingleVenue?: boolean;
+  onSiteOvernightStay?: boolean;
   externalVenue?: boolean;
   classificationRoute?: EventRoute;
   classificationReason?: string;
@@ -178,6 +183,18 @@ function displayDate(value: string | undefined) {
   return displayDateFromIsoDate(value) ?? text(value);
 }
 
+// Human-facing event date label that covers single-day and multi-day events.
+// Renders "DD-MM-YYYY" or "DD-MM-YYYY to DD-MM-YYYY" from the structured start/end
+// dates so every generated artifact shows the full range, not just the start day.
+function eventDateRangeDisplay(input: EventPackInput) {
+  return (
+    eventDateRangeLabel({
+      startIsoDate: input.proposedDate,
+      endIsoDate: input.proposedEndDate,
+    }) ?? text(input.proposedDate)
+  );
+}
+
 function generatedDisplayDate(input: EventPackInput) {
   const generatedAt = input.generatedAtUtc
     ? new Date(input.generatedAtUtc)
@@ -190,7 +207,7 @@ function generatedDisplayDate(input: EventPackInput) {
 }
 
 function eventDateTimeWithSetup(input: EventPackInput) {
-  const date = displayDate(input.proposedDate);
+  const date = eventDateRangeDisplay(input);
   const setup = text(input.setupStartTime);
   const start = text(input.eventStartTime);
   const end = text(input.eventEndTime);
@@ -328,9 +345,73 @@ function speakerTopics(input: EventPackInput) {
   return topics.length > 0 ? topics.join("; ") : "TBC";
 }
 
+// Important submission fields that are still TBC in the generated pack. Derived
+// deterministically from the input so the internal review / form pack do not
+// report "None recorded" while the risk, header, and form fields still carry
+// TBC values for things the SU form requires.
+function deriveMissingCriticalFields(input: EventPackInput): string[] {
+  const missing: string[] = [];
+  const isTrip =
+    input.classificationRoute === "trip_process" ||
+    Boolean(input.tripBeyondM25 || input.overnightTrip);
+
+  if (!input.proposedDate?.trim()) missing.push("Event date");
+  if (!input.eventStartTime?.trim() || !input.eventEndTime?.trim()) {
+    missing.push("Event start/end time");
+  }
+  if (!input.preferredLocation?.trim()) missing.push("Confirmed event location");
+  if (typeof input.expectedAttendance !== "number") {
+    missing.push("Expected attendance");
+  }
+  if (!input.firstAidPlan?.trim()) missing.push("First-aid plan");
+  if (!input.organiserName?.trim()) missing.push("Event lead name");
+  if (!input.organiserLseEmail?.trim()) missing.push("Event lead LSE email");
+  if (!input.organiserContactNumber?.trim()) {
+    missing.push("Event lead contact number");
+  }
+  if (hasSpeakers(input) && !input.academicChairStatus?.trim()) {
+    missing.push("Academic chair status");
+  }
+  if (isTrip) {
+    if (!input.transportPlan?.trim()) missing.push("Transport plan");
+    if (
+      (input.overnightTrip || input.accommodationPlan !== undefined) &&
+      !input.accommodationPlan?.trim()
+    ) {
+      missing.push("Accommodation plan");
+    }
+    // A trip almost always has coach/accommodation costs. If no amount is known,
+    // record cost/budget as a blocker rather than shipping a pack with none.
+    if (typeof input.estimatedCost !== "number") {
+      missing.push("Trip cost / budget estimate");
+    }
+  }
+
+  return missing;
+}
+
+// Model-supplied missing fields merged with the deterministically derived TBCs,
+// de-duplicated case-insensitively. This is the list shown to humans everywhere.
+export function effectiveMissingCriticalFields(input: EventPackInput): string[] {
+  const supplied = (input.missingCriticalFields ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const value of [...supplied, ...deriveMissingCriticalFields(input)]) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+
+  return out;
+}
+
 function submissionReadiness(input: EventPackInput) {
   const blockers = [
-    ...(input.missingCriticalFields ?? []),
+    ...effectiveMissingCriticalFields(input),
     ...(input.blocksFinalSubmissionReadiness ?? []),
   ].filter((value, index, values) => value.trim() && values.indexOf(value) === index);
 
@@ -550,6 +631,60 @@ export function buildRiskRows(input: EventPackInput) {
         "Confirm venue risk information, accessibility, insurance/licensing expectations, emergency contacts, and arrival/departure route.",
       actionsDuringEvent:
         "Follow venue staff instructions, keep committee contact visible, and record/report any incidents through the agreed process.",
+      owner,
+    });
+  }
+
+  // Trip-shaped risks. Driven by the structured trip flags / plans the model
+  // supplies, not by prose parsing (see AGENTS.md route-classification note).
+  const isAwayTrip = Boolean(input.tripBeyondM25 || input.overnightTrip);
+  const hasTransport = Boolean(input.transportPlan?.trim()) || isAwayTrip;
+  const hasOvernightAway =
+    Boolean(input.overnightTrip) || Boolean(input.accommodationPlan?.trim());
+
+  if (hasTransport) {
+    activityRisks.push({
+      hazardIdentified: "Coach Transport and Travel Delays",
+      whyHazard:
+        "Group travel by coach or other transport adds road-traffic, boarding, head-count, and travel-delay risks, and attendees can be stranded or split from the group if timings slip.",
+      whoAtRisk: "Attendees, committee members, drivers, and the public.",
+      riskScore: "TBC - committee to confirm",
+      actionsBeforeEvent: `Confirm transport provider, pick-up/drop-off points, departure and return times, and a named trip lead. Build in a travel-delay buffer, share an emergency contact number, and agree a register/head-count routine. Transport plan: ${text(
+        input.transportPlan,
+      )}.`,
+      actionsDuringEvent:
+        "Take a register at each departure, keep the group together, monitor timings and traffic, keep the emergency contact reachable, and escalate delays or incidents to the trip lead and emergency services as needed.",
+      owner,
+    });
+  }
+
+  if (hasOvernightAway) {
+    activityRisks.push({
+      hazardIdentified: "Overnight Accommodation, Rooming and Welfare",
+      whyHazard:
+        "Overnight stays away from the normal venue add accommodation safety, rooming, safeguarding, welfare, and out-of-hours emergency risks.",
+      whoAtRisk: "Attendees, committee members, and accommodation staff.",
+      riskScore: "TBC - committee to confirm",
+      actionsBeforeEvent: `Confirm the accommodation booking, rooming plan, fire/evacuation information, supervision and safeguarding arrangements, and an out-of-hours emergency contact. Accommodation plan: ${text(
+        input.accommodationPlan,
+      )}.`,
+      actionsDuringEvent:
+        "Keep a named committee contact on call overnight, check welfare, follow the accommodation's fire/safety rules, and escalate safeguarding or welfare concerns through the agreed route.",
+      owner,
+    });
+  }
+
+  if (input.onSiteOvernightStay) {
+    activityRisks.push({
+      hazardIdentified: "On-site Overnight Stay and Welfare",
+      whyHazard:
+        "Participants staying overnight on-site (for example coding through the night) face fatigue, welfare, security, lone-working, and out-of-hours first-aid and evacuation risks.",
+      whoAtRisk: "Attendees, committee members, and venue/security staff.",
+      riskScore: "TBC - committee to confirm",
+      actionsBeforeEvent:
+        "Confirm the venue permits overnight use, agree overnight supervision and security cover, set rest/quiet areas and break expectations, confirm out-of-hours first-aid and evacuation routes, and share an overnight emergency contact.",
+      actionsDuringEvent:
+        "Keep a named committee lead on-site overnight, encourage breaks and rest, monitor welfare and fatigue, keep exits and first-aid access clear, and escalate medical or security concerns immediately.",
       owner,
     });
   }
@@ -985,7 +1120,7 @@ export function buildFormFieldPackSheet(
     links.accessibilityTasksStatus ?? "Tracked in Compliance Tasks when tracker updates are enabled.",
   );
 
-  for (const missing of input.missingCriticalFields ?? []) {
+  for (const missing of effectiveMissingCriticalFields(input)) {
     add("Missing Information", missing, "TBC", "Required before final submission readiness", true);
   }
 
@@ -1263,7 +1398,7 @@ ${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
 
 ## Missing Information
 
-${listOrNone(input.missingCriticalFields)}
+${listOrNone(effectiveMissingCriticalFields(input))}
 `;
   }
 
@@ -1290,7 +1425,7 @@ ${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
 
 ## Missing Information
 
-${listOrNone(input.missingCriticalFields)}
+${listOrNone(effectiveMissingCriticalFields(input))}
 `;
   }
 
@@ -1328,7 +1463,7 @@ ${attachmentLine("Internal review summary", links.internalReviewSummaryLink)}
 
 ## Missing Information
 
-${listOrNone(input.missingCriticalFields)}
+${listOrNone(effectiveMissingCriticalFields(input))}
 `;
 }
 
@@ -1382,7 +1517,7 @@ ${FIELD_PACK_DISCLAIMER} Rules/templates last manually verified on ${input.rules
 
 - Event ID: ${input.eventId}
 - Event: ${input.eventName}
-- Event date: ${displayDate(input.proposedDate)}
+- Event date: ${eventDateRangeDisplay(input)}
 - Classification: ${routeLabel(input.classificationRoute)}
 - Timezone: Europe/London
 - Working-day note: Indicative deadline, excludes weekends but not bank holidays unless a bank-holiday calendar is configured.
@@ -1407,7 +1542,8 @@ ${FIELD_PACK_DISCLAIMER} Rules/templates last manually verified on ${input.rules
 - Event ID: ${input.eventId}
 - Pack ID: ${buildPackId(input.eventId, input.packVersion ?? 1)}
 - Event: ${input.eventName}
-- Date: ${displayDate(input.proposedDate)}
+- Date: ${eventDateRangeDisplay(input)}
+- Location: ${text(input.preferredLocation)}
 - Classification: ${routeLabel(input.classificationRoute)}
 - Classification reason: ${text(input.classificationReason)}
 - Generated by: ${text(input.generatedBy)}
@@ -1428,7 +1564,7 @@ ${listOrNone(input.triggers)}
 
 ## Missing Critical Fields
 
-${listOrNone(input.missingCriticalFields)}
+${listOrNone(effectiveMissingCriticalFields(input))}
 
 ## Final-Readiness Blockers
 
@@ -1460,7 +1596,7 @@ export function buildEventTrackerRow(
   return {
     "Event ID": input.eventId,
     "Event Name": input.eventName,
-    Date: displayDate(input.proposedDate),
+    Date: eventDateRangeDisplay(input),
     Time: eventDateTimeWithSetup(input),
     Owner: text(input.organiserName, ""),
     "Channel Thread Link": "",
@@ -1477,7 +1613,7 @@ export function buildEventTrackerRow(
     "Risk Assessment Status": links.riskAssessmentLink ? "draft generated" : "not generated",
     "Budget Status": links.budgetLink ? "draft generated" : "not generated",
     "Form Field Pack Status": links.fieldPackLink ? "draft generated" : "not generated",
-    "Missing Critical Fields": (input.missingCriticalFields ?? []).join("; "),
+    "Missing Critical Fields": effectiveMissingCriticalFields(input).join("; "),
     "Submission Readiness": submissionReadiness(input),
     "SU Submission Status": "not submitted by Vichita",
     "SU Approval Status": "not recorded",
@@ -1514,6 +1650,64 @@ export function buildPackIndexRow(
 }
 
 export function documentBaseName(input: EventPackInput) {
+  // Visible names use the start date only; the full range lives in the
+  // human-facing content fields (date/time, deadline plan, internal review).
   return `${displayDate(input.proposedDate)} - ${input.eventName}`;
+}
+
+export type PackDocumentType =
+  | "risk-assessment"
+  | "budget"
+  | "field-pack-sheet"
+  | "deadline-plan-sheet"
+  | "internal-review-summary";
+
+export const PACK_DOCUMENT_LABELS: Record<PackDocumentType, string> = {
+  "risk-assessment": "Risk Assessment",
+  budget: "Budget",
+  "field-pack-sheet": "LSESU Form Field Pack",
+  "deadline-plan-sheet": "Deadline Plan",
+  "internal-review-summary": "Internal Review Summary",
+};
+
+// Visible file name for a generated pack document, for example
+// "14-03-2027 - Velocity Build Night - Risk Assessment v1". Centralised so
+// initial generation and in-place rename produce identical names.
+export function packDocumentFileName({
+  baseName,
+  documentType,
+  packVersion,
+}: {
+  baseName: string;
+  documentType: PackDocumentType;
+  packVersion: number;
+}) {
+  return `${baseName} - ${PACK_DOCUMENT_LABELS[documentType]} v${packVersion}`;
+}
+
+// Quantity columns in the tagged budget template inherit a currency format from
+// the neighbouring price column, so a quantity like 80 renders as a currency
+// amount. After the numeric values are written, these ranges are reset to a
+// plain integer number format. Expressed as data so the request shape can be
+// unit-tested without a live Sheets client.
+export const BUDGET_QUANTITY_GRID_RANGES = [
+  // Expense quantity column D7:D16 (0-based rows 6-15, column index 3).
+  { startRowIndex: 6, endRowIndex: 16, startColumnIndex: 3, endColumnIndex: 4 },
+  // Income quantity column D20:D26 (0-based rows 19-25, column index 3).
+  { startRowIndex: 19, endRowIndex: 26, startColumnIndex: 3, endColumnIndex: 4 },
+] as const;
+
+export function buildBudgetQuantityNumberFormatRequests(
+  sheetId: number,
+): sheets_v4.Schema$Request[] {
+  return BUDGET_QUANTITY_GRID_RANGES.map((range) => ({
+    repeatCell: {
+      range: { sheetId, ...range },
+      cell: {
+        userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "0" } },
+      },
+      fields: "userEnteredFormat.numberFormat",
+    },
+  }));
 }
 
