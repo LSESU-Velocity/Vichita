@@ -4,6 +4,7 @@ import test from "node:test";
 import type { docs_v1 } from "googleapis";
 
 import {
+  assertPackFolderEventIdMatches,
   buildEventIdentity,
   buildPackId,
   buildSlackThreadKey,
@@ -76,7 +77,9 @@ import {
   type IndexedDocsRequest,
 } from "../agent/lib/googleWorkspace/riskAssessmentDoc.ts";
 import {
+  eventPackRoutingContext,
   eventPackUpdateFastPathContext,
+  matchesEventPackRegenerateInPlace,
   matchesEventPackUpdateFastPath,
 } from "../agent/lib/eventPackFastPath.ts";
 import {
@@ -1704,6 +1707,58 @@ test("fast path matches real pack corrections and ignores status reads", () => {
       "make the venue bigger and update the pack",
     ),
     true,
+  );
+});
+
+test("regenerate-in-place routing resolves the existing pack before generate_event_pack", () => {
+  const message =
+    "@vichita regenerate the Velocity QA Build Night 2028 pack in place using the same Event ID and same pack version, with updateExistingDrafts=true. Use March 1 to 2nd 2028, LSE Old Building 4.01, 90 attendees, Notion pizza sponsorship worth 500 GBP, and on-site overnight stay.";
+
+  assert.equal(matchesEventPackRegenerateInPlace(message), true);
+  assert.equal(matchesEventPackUpdateFastPath(message), false);
+
+  const context = eventPackRoutingContext(message) ?? "";
+  assert.match(context, /find_event_pack/);
+  assert.match(context, /generate_event_pack once/);
+  assert.match(context, /Do not call prepare_event_identity/);
+});
+
+test("provided pack folder rejects a re-minted Event ID instead of duplicating drafts", () => {
+  const storedEventId = "EVT-20280215-velocity-qa-build-night-2028-abcd1234";
+  const folderName = "01-03-2028 - Velocity QA Build Night 2028";
+  const folderLink =
+    "https://drive.google.com/drive/folders/REDACTED-TEST-FOLDER-ID";
+
+  // A date-derived Event ID (March 1) must not be written into a folder that
+  // already belongs to the original Event ID, or the draft dedupe misses the
+  // existing files and silently creates a second set of drafts in the folder.
+  assert.throws(
+    () =>
+      assertPackFolderEventIdMatches({
+        storedEventId,
+        expectedEventId: "EVT-20280301-velocity-qa-build-night-2028-efd5f254",
+        folderName,
+        folderLink,
+      }),
+    /stores Event ID EVT-20280215.*not EVT-20280301.*find_event_pack/s,
+  );
+
+  // The resolved (matching) Event ID is accepted.
+  assert.doesNotThrow(() =>
+    assertPackFolderEventIdMatches({
+      storedEventId,
+      expectedEventId: storedEventId,
+      folderName,
+      folderLink,
+    }),
+  );
+
+  // A legacy/manual folder with no stored Event ID is not blocked.
+  assert.doesNotThrow(() =>
+    assertPackFolderEventIdMatches({
+      storedEventId: undefined,
+      expectedEventId: "EVT-20280301-velocity-qa-build-night-2028-efd5f254",
+    }),
   );
 });
 

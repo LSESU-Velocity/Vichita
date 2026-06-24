@@ -56,12 +56,27 @@ const NON_EVENT_SUBJECT =
 const UNSUPPORTED_EVENT_STATUS =
   /\b(event'?s?\s+status|status\s+of\s+(?:the\s+|this\s+|that\s+)?event)\b/;
 
+// A deliberate in-place regeneration is different from a partial field patch:
+// it should resolve the stored Event ID/folder first, then call generate_event_pack
+// with updateExistingDrafts=true.
+const REGENERATE_IN_PLACE =
+  /\b(re[- ]?generate|regenerate|rebuild|rerun|re[- ]?run|recreate|refresh)\b[\s\S]{0,120}\b(pack|drafts?|files?|docs?|documents?|risk[- ]?assessment)\b|\b(pack|drafts?|files?|docs?|documents?|risk[- ]?assessment)\b[\s\S]{0,120}\b(re[- ]?generate|regenerate|rebuild|rerun|re[- ]?run|recreate|refresh)\b/;
+
+const IN_PLACE_IDENTITY =
+  /\b(in place|same event id|same pack version|same version|updateexistingdrafts\s*=?\s*true|update existing drafts)\b/;
+
 /**
  * True when a Slack message looks like a correction to an existing event pack.
  * Pure and side-effect free so it can be unit tested in isolation.
  */
 export function matchesEventPackUpdateFastPath(message: string): boolean {
   const normalized = message.toLowerCase();
+
+  // Full in-place regeneration uses generate_event_pack after a read-only
+  // identity lookup, not the partial-field patch tool.
+  if (REGENERATE_IN_PLACE.test(normalized) && IN_PLACE_IDENTITY.test(normalized)) {
+    return false;
+  }
 
   // Status reads and new-pack/new-event creation are not existing-pack corrections.
   if (READ_INTENT.test(normalized)) return false;
@@ -124,4 +139,24 @@ export function eventPackUpdateFastPathContext(
     "If the user only wants status or did not request a change, ignore this hint and respond normally.",
     "</automated_routing_hint>",
   ].join("\n");
+}
+export function matchesEventPackRegenerateInPlace(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return REGENERATE_IN_PLACE.test(normalized) && IN_PLACE_IDENTITY.test(normalized);
+}
+
+export function eventPackRoutingContext(message: string): string | undefined {
+  if (matchesEventPackRegenerateInPlace(message)) {
+    return [
+      "<automated_routing_hint>",
+      "This is an automated classifier hint, not a message from the user.",
+      "This Slack message asks to regenerate an existing event pack in place, using the same Event ID and same pack version.",
+      "First call the read-only find_event_pack tool with the visible eventName, Event ID, pack link, or Slack thread context to resolve the stored eventId, packFolderId, and packVersion.",
+      "Then send one short proposal (at most 6 bullets or 120 words) and call generate_event_pack once with the returned eventId, packFolderId, packVersion, and updateExistingDrafts=true.",
+      "Do not call prepare_event_identity or mint a new Event ID from a changed event date. If find_event_pack cannot find one unique pack, ask for the exact folder link or existing Event ID instead of calling an approval-gated write tool.",
+      "</automated_routing_hint>",
+    ].join("\n");
+  }
+
+  return eventPackUpdateFastPathContext(message);
 }

@@ -3,7 +3,11 @@ import type { sheets_v4 } from "googleapis";
 import { always } from "eve/tools/approval";
 import { z } from "zod";
 
-import { buildPackId, parseEventId } from "../lib/eventIdentity.js";
+import {
+  assertPackFolderEventIdMatches,
+  buildPackId,
+  parseEventId,
+} from "../lib/eventIdentity.js";
 import { isIsoCalendarDate } from "../lib/dateLabels.js";
 import {
   buildAccessibilityComplianceTaskRows,
@@ -242,11 +246,12 @@ function existingFileOutput(file: ExistingFile): DriveFileOutput {
   };
 }
 
-async function validateProvidedPackFolder(folderId: string) {
+async function validateProvidedPackFolder(folderId: string, expectedEventId: string) {
   const drive = createDriveClient();
   const response = await drive.files.get({
     fileId: folderId,
-    fields: "id,name,mimeType,trashed,webViewLink,capabilities(canAddChildren,canEdit)",
+    fields:
+      "id,name,mimeType,trashed,webViewLink,appProperties,capabilities(canAddChildren,canEdit)",
     supportsAllDrives: true,
   });
   const file = response.data;
@@ -262,6 +267,16 @@ async function validateProvidedPackFolder(folderId: string) {
       "The service account cannot add files to the provided packFolderId.",
     );
   }
+
+  // The folder owns the pack identity. Reject a mismatched eventId here, before any
+  // write, so we never silently create a second set of drafts (the draft dedupe keys
+  // on vichitaEventId) inside a folder that belongs to a different Event ID.
+  assertPackFolderEventIdMatches({
+    storedEventId: file.appProperties?.vichitaEventId,
+    expectedEventId,
+    folderName: file.name,
+    folderLink: file.webViewLink ?? driveFolderUrl(folderId),
+  });
 
   return {
     id: file.id ?? folderId,
@@ -738,7 +753,7 @@ async function tracePackOperation<T>(
 
 export default defineTool({
   description:
-    "Approval-gated Google Workspace write. Generate a draft event pack for an Event ID: fill the tagged risk-assessment Google Doc template, copy/fill the budget Google Sheet when required or requested, create form-field and deadline Google Sheets, create the internal review Google Doc, and upsert tracker/task links. Before this tool, emit only a short proposal, max 6 bullets or 120 words, then call it once and let the approval card handle consent. Do not generate a long staged summary, full deadline list, separate proceed question, or repeated approval calls in the same run. Humans still review and submit all SU forms manually.",
+    "Approval-gated Google Workspace write. Generate a draft event pack for an Event ID: fill the tagged risk-assessment Google Doc template, copy/fill the budget Google Sheet when required or requested, create form-field and deadline Google Sheets, create the internal review Google Doc, and upsert tracker/task links. For an in-place regeneration of an existing pack, first use the read-only find_event_pack tool and pass the returned eventId, packFolderId, packVersion, and updateExistingDrafts=true; do not mint a new Event ID from a changed date. Before this tool, emit only a short proposal, max 6 bullets or 120 words, then call it once and let the approval card handle consent. Do not generate a long staged summary, full deadline list, separate proceed question, or repeated approval calls in the same run. Humans still review and submit all SU forms manually.",
   inputSchema: Input,
   needsApproval: always(),
   async execute(input) {
@@ -799,7 +814,7 @@ export default defineTool({
     const folder = input.packFolderId
       ? await tracePackOperation(traceGoogleWrite, "folder.validateProvided", async () => ({
           action: "provided" as const,
-          folder: await validateProvidedPackFolder(input.packFolderId!),
+          folder: await validateProvidedPackFolder(input.packFolderId!, input.eventId),
         }))
       : await tracePackOperation(traceGoogleWrite, "folder.createOrFind", () =>
           createOrFindEventPackFolder({

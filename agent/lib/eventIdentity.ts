@@ -166,3 +166,41 @@ export function buildPackId(eventId: string, version = 1) {
 
   return `${eventId}-PACK-v${version}`;
 }
+
+/**
+ * Guards an in-place write against an Event ID / folder mismatch.
+ *
+ * A provided pack folder is the identity source of truth: its stored
+ * `vichitaEventId` is what the draft dedupe keys on. If we write a different
+ * eventId into that folder, the dedupe misses the existing drafts and silently
+ * creates a second set of files in the same folder. Throw loudly instead so the
+ * caller resolves the real Event ID (via find_event_pack) and retries.
+ *
+ * A folder with no stored Event ID (legacy or manually created) is not blocked,
+ * because there is nothing to contradict.
+ */
+export function assertPackFolderEventIdMatches({
+  storedEventId,
+  expectedEventId,
+  folderName,
+  folderLink,
+}: {
+  storedEventId?: string | null;
+  expectedEventId: string;
+  folderName?: string | null;
+  folderLink?: string | null;
+}) {
+  const stored = storedEventId?.trim();
+  if (!stored || stored === expectedEventId.trim()) return;
+
+  const trimmedName = folderName?.trim();
+  const folderLabel = trimmedName
+    ? `"${trimmedName}"${folderLink ? ` (${folderLink})` : ""}`
+    : (folderLink ?? "the provided pack folder");
+
+  throw new Error(
+    `The provided packFolderId ${folderLabel} stores Event ID ${stored}, not ${expectedEventId}. ` +
+      "Use find_event_pack to resolve the existing Event ID and pass that same eventId " +
+      "(do not mint a new Event ID from a changed date), or pass the correct pack folder.",
+  );
+}

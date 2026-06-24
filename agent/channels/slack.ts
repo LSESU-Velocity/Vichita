@@ -6,7 +6,7 @@ import {
   type SlackChannelState,
 } from "eve/channels/slack";
 
-import { eventPackUpdateFastPathContext } from "../lib/eventPackFastPath.js";
+import { eventPackRoutingContext } from "../lib/eventPackFastPath.js";
 import { isSlackViewSubmissionBody } from "../lib/slackProxy.js";
 
 const slack = slackChannel({
@@ -21,13 +21,13 @@ const slack = slackChannel({
   async onAppMention(ctx, message) {
     await ctx.thread.startTyping("Thinking...");
     const auth = defaultSlackAuth(message, ctx);
-    const fastPathContext = eventPackUpdateFastPathContext(message.markdown);
+    const fastPathContext = eventPackRoutingContext(message.markdown);
     return fastPathContext ? { auth, context: [fastPathContext] } : { auth };
   },
   async onDirectMessage(ctx, message) {
     await ctx.thread.startTyping("Thinking...");
     const auth = defaultSlackAuth(message, ctx);
-    const fastPathContext = eventPackUpdateFastPathContext(message.markdown);
+    const fastPathContext = eventPackRoutingContext(message.markdown);
     return fastPathContext ? { auth, context: [fastPathContext] } : { auth };
   },
 });
