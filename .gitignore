@@ -61,6 +61,10 @@ exports/
 tmp/
 .tmp/
 
+# Internal engineering handoff / diagnostic notes (keep local, not for public repo)
+Files/docs/*HANDOFF*
+Files/docs/*handoff*
+
 # Local caches
 .cache/
 .eslintcache

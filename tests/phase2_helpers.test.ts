@@ -1784,7 +1784,7 @@ test("provided pack folder rejects a re-minted Event ID instead of duplicating d
   const storedEventId = "EVT-20280215-velocity-qa-build-night-2028-abcd1234";
   const folderName = "01-03-2028 - Velocity QA Build Night 2028";
   const folderLink =
-    "https://drive.google.com/drive/folders/REDACTED-TEST-FOLDER-ID";
+    "https://drive.google.com/drive/folders/1exampleFakeFolderIdForTests000";
 
   // A date-derived Event ID (March 1) must not be written into a folder that
   // already belongs to the original Event ID, or the draft dedupe misses the

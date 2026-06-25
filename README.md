@@ -1,8 +1,19 @@
 # Vichita
 
-Vichita is an AI operations agent for LSESU Velocity. It is designed to help student societies manage event admin, internal compliance checklists, Google Workspace document packs, sponsorship/finance workflows, and committee reminders.
+Vichita is an AI operations agent for student society committees. It runs as a reactive Slack bot that helps with event admin: SU route classification, internal readiness and compliance checks, Google Workspace document packs (risk assessment, budget, LSESU form-field pack, deadline plan, internal review), committee reminders, and later sponsorship and finance workflows.
 
-The project is intended to be reusable by other societies, but each society must configure its own rules, templates, Google Workspace, Slack workspace, and data-handling policies.
+It was built for LSESU Velocity and is deployed and in use, but it is structured so any society can adapt it: bring your own rules, templates, Google Workspace, Slack workspace, and data-handling policy.
+
+*Built on the [Eve](https://www.npmjs.com/package/eve) agent framework and deployed on Vercel. "Eve" is the runtime; the agent answers as Vichita.*
+
+## What it does
+
+- Classifies an event's SU route and flags missing intake fields, from a Slack @mention.
+- Generates an approval-gated Google Workspace pack (risk assessment Doc, budget Sheet, LSESU form-field pack, deadline plan, internal review summary) plus tracker and compliance-task rows.
+- Patches existing packs in place for corrections (new date, venue, attendance, organiser) without minting a new event.
+- Sends committee reminders only when a member explicitly asks.
+
+Reactive by design: it acts only on an @mention, DM, or approved Slack modal/button. It does not passively monitor channels, submit SU forms, or give final compliance approval.
 
 ## Status
 
@@ -19,6 +30,7 @@ Completed:
 - Initial Slack-tested event classification flow with draft-only disclaimer.
 - Phase 2 Google Workspace foundation is live-smoke-tested: env/config validation, Google service-account auth via `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, one-spreadsheet tracker schema setup with under-width tab expansion, stable Slack-thread Event ID/idempotency helpers, approval-gated Drive folder creation, tracker verification, and RAW Source Registry upsert foundation.
 - Phase 4 event-pack generation is implemented and live-tested: approval-gated pack generation creates/updates the risk assessment Google Doc, budget Google Sheet, LSESU form-field Google Sheet, deadline plan Google Sheet, internal review summary Google Doc, and tracker/compliance-task rows.
+- Budget Google Sheets compute line and category totals and reconcile expense lines against the stated event cost.
 - Same-version event-pack patching is implemented for corrections to existing packs, with lookup by visible event name, Event ID, folder link, or Slack thread context.
 - The pre-approval Slack step was shortened so Eve can checkpoint approval cards reliably before Vercel's 300-second Hobby runtime cap.
 - Slack modal submissions are handled through an in-process Eve Slack route wrapper that returns Slack's expected empty `200` for `view_submission` while preserving Eve's answer recording.
@@ -84,18 +96,7 @@ channel at Vercel Connect's default trigger path, `/triggers/slack`.
 
 ## Core Idea
 
-Vichita should be a reactive Slack operations agent. It should act only when a committee member mentions it, DMs it, or uses an approved Slack modal/button.
-
-It should help with:
-
-- Event route classification and missing-field checks.
-- Risk assessment and budget pack generation.
-- Copy-ready internal form field packs.
-- Google Drive folder and tracker updates after approval.
-- Committee reminders explicitly requested by a user.
-- Sponsorship, finance, website, and automation workflow support in later phases.
-
-It should not:
+Vichita is deliberately narrow. Beyond the workflows above, and sponsorship, finance, website, and automation support in later phases, it should not:
 
 - Passively monitor Slack channels.
 - Submit SU forms automatically.
