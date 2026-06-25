@@ -758,9 +758,44 @@ function blankNumberRows(count: number) {
   return Array.from({ length: count }, () => ["", ""] as [string | number, string | number]);
 }
 
+function budgetLineTotal(line: BudgetLineItem) {
+  return line.pricePerItem * line.quantity;
+}
+
 function normalizeExpenses(input: EventPackInput) {
   const explicit = (input.budget?.expenses ?? []).slice(0, 10);
-  if (explicit.length > 0) return explicit;
+  if (explicit.length > 0) {
+    const explicitTotal = explicit.reduce((total, line) => total + budgetLineTotal(line), 0);
+    const missingEstimate =
+      typeof input.estimatedCost === "number"
+        ? Math.round((input.estimatedCost - explicitTotal) * 100) / 100
+        : 0;
+
+    if (missingEstimate > 0.01) {
+      const balancingLine = {
+        description: "Unitemised estimated costs",
+        pricePerItem: missingEstimate,
+        quantity: 1,
+        notes:
+          "Added so itemised expenditure matches the total event cost estimate. Committee should replace with specific cost lines before submission.",
+      };
+
+      if (explicit.length < 10) {
+        return [...explicit, balancingLine];
+      }
+
+      return [
+        ...explicit.slice(0, 9),
+        {
+          ...balancingLine,
+          notes:
+            "Added because the supplied itemised lines filled all available rows but were below the total event cost estimate. Committee should review and itemise before submission.",
+        },
+      ];
+    }
+
+    return explicit;
+  }
 
   if (typeof input.estimatedCost === "number" && input.estimatedCost > 0) {
     return [

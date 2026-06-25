@@ -759,6 +759,63 @@ test("event pack budget sheet updates preserve numeric planning values", () => {
   assert.equal(typeof incomeRows?.values[0][0], "number");
 });
 
+test("event pack budget sheet reconciles partial expenses to the stated event cost", () => {
+  const updates = buildBudgetSheetUpdates({
+    eventId: "EVT-20261015-ai-build-night-312f884a",
+    eventName: "AI Build Night",
+    estimatedCost: 650,
+    budget: {
+      expenses: [
+        {
+          description: "Pizza",
+          pricePerItem: 15,
+          quantity: 20,
+          notes: "Notion-sponsored",
+        },
+        {
+          description: "Soft drinks",
+          pricePerItem: 1.5,
+          quantity: 100,
+          notes: "Notion-sponsored",
+        },
+        {
+          description: "Room/setup supplies",
+          pricePerItem: 50,
+          quantity: 1,
+        },
+      ],
+      income: {
+        sponsorship: {
+          pricePerItem: 300,
+          quantity: 1,
+          notes: "Notion sponsorship",
+        },
+        societyAccountContribution: {
+          pricePerItem: 350,
+          quantity: 1,
+          notes: "Society balance contribution",
+        },
+      },
+    },
+  });
+  const expenseDescriptions = updates.find((update) => update.range === "'Budget Template'!B7:B16");
+  const expenseNumbers = updates.find((update) => update.range === "'Budget Template'!C7:D16");
+  const expenseNotes = updates.find((update) => update.range === "'Budget Template'!F7:F16");
+
+  assert.equal(expenseDescriptions?.values[3][0], "Unitemised estimated costs");
+  assert.equal(expenseNumbers?.values[3][0], 150);
+  assert.equal(expenseNumbers?.values[3][1], 1);
+  assert.match(String(expenseNotes?.values[3][0]), /matches the total event cost estimate/);
+
+  const expenditureTotal = expenseNumbers?.values.reduce((total, row) => {
+    const price = typeof row[0] === "number" ? row[0] : 0;
+    const quantity = typeof row[1] === "number" ? row[1] : 0;
+    return total + price * quantity;
+  }, 0);
+
+  assert.equal(expenditureTotal, 650);
+});
+
 test("minimal Google Doc text edits replace only the changed span", () => {
   assert.deepEqual(
     minimalTextEdit("alpha\nbeta\ngamma", "alpha\nBETA\ngamma"),
