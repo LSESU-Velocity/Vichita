@@ -1,10 +1,10 @@
 # Vichita
 
-Vichita is an AI operations agent for student society committees. It runs as a reactive Slack bot that helps with event admin: SU route classification, internal readiness and compliance checks, Google Workspace document packs (risk assessment, budget, LSESU form-field pack, deadline plan, internal review), committee reminders, and later sponsorship and finance workflows.
+Vichita is an AI operations agent for student society committees. It runs as a reactive Slack agent that helps with event admin: SU route classification, internal readiness and compliance checks, Google Workspace document packs (risk assessment, budget, LSESU form-field pack, deadline plan, internal review), committee reminders, and later sponsorship and finance workflows.
 
-It was built for LSESU Velocity and is deployed and in use, but it is structured so any society can adapt it: bring your own rules, templates, Google Workspace, Slack workspace, and data-handling policy.
+It was built for LSESU Velocity, but it is structured so any society can adapt it: bring your own rules, templates, Google Workspace, Slack workspace, and data-handling policy.
 
-*Built on the [Eve](https://www.npmjs.com/package/eve) agent framework and deployed on Vercel. "Eve" is the runtime; the agent answers as Vichita.*
+*Built on the [Eve](https://vercel.com/eve) agent framework and deployed on Vercel.
 
 ## What it does
 
@@ -26,9 +26,9 @@ Completed:
 - Vercel deployment at `https://vichita.vercel.app`, connected to GitHub.
 - Vercel Connect Slack integration. The bot responds to @mentions in the private `#vichita` test channel.
 - Slack trigger route fixed to match Vercel Connect's default path: `POST /triggers/slack`.
-- Vercel AI Gateway model routing configured through `EVE_MODEL`, currently defaulting to `zai/glm-5.2`, with same-provider fallback protection.
+- Vercel AI Gateway model routing configured through `EVE_MODEL`, with same-provider fallback protection.
 - Initial Slack-tested event classification flow with draft-only disclaimer.
-- Phase 2 Google Workspace foundation is live-smoke-tested: env/config validation, Google service-account auth via `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, one-spreadsheet tracker schema setup with under-width tab expansion, stable Slack-thread Event ID/idempotency helpers, approval-gated Drive folder creation, tracker verification, and RAW Source Registry upsert foundation.
+- Phase 2 Google Workspace foundation is live-tested: env/config validation, Google service-account auth via `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`, Drive root access check, one-spreadsheet tracker schema setup with under-width tab expansion, stable Slack-thread Event ID/idempotency helpers, approval-gated Drive folder creation, tracker verification, and RAW Source Registry upsert foundation.
 - Phase 4 event-pack generation is implemented and live-tested: approval-gated pack generation creates/updates the risk assessment Google Doc, budget Google Sheet, LSESU form-field Google Sheet, deadline plan Google Sheet, internal review summary Google Doc, and tracker/compliance-task rows.
 - Budget Google Sheets compute line and category totals and reconcile expense lines against the stated event cost.
 - Same-version event-pack patching is implemented for corrections to existing packs, with lookup by visible event name, Event ID, folder link, or Slack thread context.
@@ -108,9 +108,7 @@ Vichita is deliberately narrow. Beyond the workflows above, and sponsorship, fin
 
 The goal is for other student societies to be able to adapt Vichita for their own workflows.
 
-This project is licensed under Apache-2.0. This keeps the project permissive and easy to reuse while providing a clearer patent grant, contribution handling, attribution structure, and trademark boundary than MIT.
-
-The root `LICENSE` and `NOTICE` files should be reviewed before the first public release.
+This project is licensed under Apache-2.0. This keeps the project permissive and easy to reuse while providing a clearer patent grant, contribution handling, attribution structure, and trademark boundary.
 
 ## Template Policy
 
