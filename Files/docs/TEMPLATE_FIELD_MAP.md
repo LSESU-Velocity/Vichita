@@ -4,6 +4,8 @@ Last updated: 2026-06-19
 
 This file maps the tagged placeholders added to the official LSESU template copies. Use these tagged copies for automation; keep the official raw files untouched.
 
+> The tagged template files referenced below are kept local and are **not committed** to the public repository (they are redistribution-sensitive; see `../templates/README.md` and the Template Policy in the root `README.md`). The `templates/tagged/...` paths below are the expected local locations. Other societies should bring their own SU's templates and tag them to match these placeholders.
+
 ## 1. Risk Assessment Template
 
 File: `templates/tagged/Risk-Assessment-Template-LSESU-TAGGED.docx`

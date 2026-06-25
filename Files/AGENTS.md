@@ -7,7 +7,7 @@ This file is for the IDE/coding agent that builds the repository. It is not the 
 1. `vichita_agent_brief_v2_google_workspace.md`
 2. `docs/DATA_HANDLING_FOR_SU_REVIEW.md`
 3. `docs/LSESU_Form_Field_Pack_Template.md`
-4. `templates/tagged/` field placeholders
+4. `docs/TEMPLATE_FIELD_MAP.md` for the tagged-template placeholders (the tagged template files live under `templates/tagged/` and are local/gitignored; see `templates/README.md`)
 5. Official Eve docs bundled in `node_modules/eve/docs` or `node_modules/eve/dist/docs/public` after install.
 
 ## Product rule
